@@ -1,0 +1,60 @@
+{
+  "name": "@d1g1tal/tsnode",
+	"author": "D1g1talEntr0py",
+  "version": "0.1.0",
+	"license": "MIT",
+  "description": "Zero-flag Node.js TypeScript loader — run .ts files directly with `tsnode foo.ts`.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/D1g1talEntr0py/tsnode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/D1g1talEntr0py/tsnode/issues"
+  },
+  "maintainers": [
+    {
+      "name": "D1g1talEntr0py",
+      "email": "jason.dimeo@gmail.com"
+    }
+  ],
+  "keywords": [
+    "typescript",
+    "node",
+    "loader",
+    "esm",
+    "cli",
+    "transpile"
+  ],
+
+  "type": "module",
+  "bin": {
+    "tsnode": "./dist/cli.js"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"import('node:fs').then(({chmodSync})=>chmodSync('./dist/cli.js',0o755))\"",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build",
+    "release:check": "pnpm run clean && pnpm run build && pnpm run test && pnpm run type-check && npm pack --dry-run",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "type-check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "vitest": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  }
+}
