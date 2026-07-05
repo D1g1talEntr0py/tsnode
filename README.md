@@ -1,67 +1,56 @@
 # tsnode
 
-`tsnode` is a CLI-first TypeScript runner for modern Node.js. It registers synchronous loader hooks and runs local `.ts` entrypoints directly, without requiring loader flags at invocation time.
+ESM-only Node.js TypeScript runner. Run `.ts` files directly:
 
-## Status
-
-This package currently supports the `tsnode` CLI as its public interface. The loader hook implementation is not yet a documented import API.
-
-## Requirements
-
-- Node.js `>=22.15.0`
-
-## Install
-
-```bash
-pnpm add -D tsnode
+```sh
+tsnode foo.ts
 ```
 
-You can also install it globally:
+A fork of [tsx](https://github.com/privatenumber/tsx) by [Hiroki Osame](https://github.com/privatenumber), with **all CommonJS handling removed** and the hot paths tuned. ESM is the only module system; CommonJS was always DOA here.
 
-```bash
-pnpm add -g tsnode
-```
+## Why
+
+- **ESM-only.** No `require()` hooks, no `.cts`/`.cjs` transforms, no CJS interop banners, no dual sync/async CJS code paths. Roughly half the loader machinery — gone.
+- **Faster.** ~10% faster warm runs, up to ~24% faster with a populated transform cache:
+  - Disk cache lookups are O(1) (indexed `Map`) instead of a linear scan of the cache directory.
+  - No synchronous cache-directory enumeration at startup.
+  - `tsconfigRaw` serialization is cached per project instead of re-stringified per file.
+  - Hot-path debug logging allocations removed.
+- **Still practical.** Importing CommonJS npm dependencies works — Node's native ESM↔CJS interop handles it. Only *authoring* CommonJS is unsupported.
 
 ## Usage
 
-Run a TypeScript entrypoint directly:
+```sh
+# Run a TypeScript file
+tsnode main.ts
 
-```bash
-tsnode ./src/index.ts
+# Watch mode
+tsnode watch main.ts
+
+# Eval (always ESM)
+tsnode -e 'const n: number = 42; console.log(n)'
+
+# Node --import registration
+node --import @d1g1tal/tsnode main.ts
 ```
 
-Arguments after the entry file are passed through to the loaded program:
+### Programmatic API
 
-```bash
-tsnode ./scripts/build.ts --watch
+```ts
+import { register, tsImport } from '@d1g1tal/tsnode/esm/api';
 ```
 
-## What It Resolves
+## What was removed from tsx
 
-The loader supports these local resolution patterns:
+- `tsx/cjs` API and all `require()` extension patching
+- `.cts` / `.cjs` file support
+- CommonJS export pre-parsing, virtual query identities, `module._resolveFilename` interop
+- `package.json` `type` walking for format detection (all TypeScript is ESM)
 
-- Relative imports such as `./helper.js` resolving to `./helper.ts`
-- Relative paths without an extension resolving to `.ts`
-- Directory imports resolving to `index.ts`
-- `src/` aliases resolving from the nearest project root containing `tsconfig.json` or `package.json`
+## Requirements
 
-## Cache Behavior
+Node.js ≥ 20.19 (native `require(esm)` and `module.registerHooks`).
 
-- Transpiled output is cached under `~/.cache/tsnode/<typescript-version>`
-- Cache keys include the source path, file metadata, current Node version, and TypeScript version
-- Cache writes are asynchronous so a cold compile does not block repeated loads in the same process
+## License & attribution
 
-## Known Limitations
-
-- The package is currently CLI-first; importing loader hooks directly is not yet a supported API
-- The transpiler targets modern ESM output for Node.js rather than older runtimes
-- Stage 3 decorators are downleveled during transpilation because current Node.js releases still do not execute that syntax directly
-
-## Development
-
-```bash
-pnpm run build
-pnpm run test
-pnpm run type-check
-pnpm run release:check
-```
+MIT. Forked from [privatenumber/tsx](https://github.com/privatenumber/tsx) — the original work is Copyright (c) Hiroki Osame. See [LICENSE](./LICENSE).

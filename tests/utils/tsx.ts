@@ -1,0 +1,189 @@
+import { fileURLToPath } from 'node:url';
+import { execaNode, type NodeOptions } from 'execa';
+import { onTestFail, onTestFinish } from 'manten';
+import { createNodeCapabilities } from '../../src/platform/node-capabilities.js';
+import type { Version } from '../../src/utils/node-features.js';
+import { getNode } from './get-node.js';
+
+type Options = {
+	args: string[];
+	nodePath?: string;
+	cwd?: string;
+};
+
+export const tsxPath = fileURLToPath(new URL('../../dist/cli.mjs', import.meta.url).toString());
+export const tsxCjsPath = fileURLToPath(new URL('../../dist/cjs/index.cjs', import.meta.url).toString());
+export const tsxCjsApiPath = fileURLToPath(new URL('../../dist/cjs/api/index.cjs', import.meta.url).toString());
+export const tsxEsmPath = new URL('../../dist/esm/index.mjs', import.meta.url).toString();
+export const tsxEsmApiPath = new URL('../../dist/esm/api/index.mjs', import.meta.url).toString();
+export const tsxEsmApiCjsPath = fileURLToPath(new URL('../../dist/esm/api/index.cjs', import.meta.url).toString());
+
+const cjsPatchPath = fileURLToPath(new URL('../../dist/cjs/index.cjs', import.meta.url).toString());
+const hookPath = new URL('../../dist/esm/index.cjs', import.meta.url).toString();
+
+export const tsx = (
+	options: Options,
+) => {
+	const tsxProcess = execaNode(
+		tsxPath,
+		options.args,
+		{
+			env: {
+				TSX_DISABLE_CACHE: '1',
+				DEBUG: '1',
+			},
+			nodePath: options.nodePath,
+			nodeOptions: [],
+			cwd: options.cwd,
+			reject: false,
+			all: true,
+		},
+	);
+
+	let result: unknown;
+	let disposed: Promise<void> | undefined;
+	const dispose = () => {
+		disposed ??= (async () => {
+			if (tsxProcess.exitCode === null) {
+				tsxProcess.kill('SIGKILL');
+			}
+			result = await tsxProcess;
+		})();
+		return disposed;
+	};
+
+	let testFailed = false;
+	onTestFail(() => {
+		testFailed = true;
+	});
+	onTestFinish(async () => {
+		await dispose();
+		if (testFailed) {
+			console.log(result);
+		}
+	});
+
+	return tsxProcess;
+};
+
+export const createNode = async (
+	nodeVersion: string,
+) => {
+	const node = await getNode(nodeVersion);
+	const versionParsed = node.version.split('.').map(Number) as Version;
+	const capabilities = createNodeCapabilities(versionParsed);
+	const supports = {
+		moduleRegister: capabilities.moduleApis.register,
+
+		moduleRegisterHooksCjsReload: capabilities.moduleApis.registerHooksCanReloadCjs,
+
+		esmLoadReadFile: capabilities.esm.loadHookCanReadFile,
+
+		importMetaPathProperties: capabilities.esm.importMetaPathProperties,
+
+		testRunnerGlob: capabilities.cli.testRunnerGlob,
+
+		cliTestFlag: capabilities.cli.testFlag,
+
+		cjsInterop: capabilities.esm.cjsNamespaceFromLoadHook,
+
+		cjsNamespaceModuleExports: capabilities.esm.cjsNamespaceIncludesModuleExports,
+
+		nativeTypeScript: capabilities.typeScript.nativeTypeScript,
+
+		wasmModules: capabilities.webAssembly.modules,
+
+		requireEsm: capabilities.commonJs.requireEsm,
+
+		requireEsmNoWarning: capabilities.commonJs.requireEsmNoWarning,
+
+		requireEsmExtensionlessMjs: capabilities.commonJs.requireEsmExtensionlessMjs,
+
+		modulePackageMainResolution: capabilities.moduleResolution.packageMainResolution,
+	};
+	const hookFlag = supports.moduleRegister ? '--import' : '--loader';
+
+	return {
+		version: node.version,
+
+		path: node.path,
+
+		supports,
+
+		tsx: (
+			args: string[],
+			cwdOrOptions?: string | NodeOptions,
+		) => {
+			const isCwd = typeof cwdOrOptions === 'string';
+			const tsxProcess = execaNode(
+				tsxPath,
+				args,
+				{
+					nodePath: node.path,
+					nodeOptions: [],
+					reject: false,
+					all: true,
+					...(
+						isCwd
+							? { cwd: cwdOrOptions }
+							: cwdOrOptions
+					),
+					env: {
+						TSX_DISABLE_CACHE: '1',
+						DEBUG: '1',
+						...(
+							(cwdOrOptions && !isCwd)
+								? cwdOrOptions.env
+								: {}
+						),
+					},
+				},
+			);
+
+			let result: unknown;
+			let disposed: Promise<void> | undefined;
+			const dispose = () => {
+				disposed ??= (async () => {
+					if (tsxProcess.exitCode === null) {
+						tsxProcess.kill('SIGKILL');
+					}
+					result = await tsxProcess;
+				})();
+				return disposed;
+			};
+
+			let testFailed = false;
+			onTestFail(() => {
+				testFailed = true;
+			});
+			onTestFinish(async () => {
+				await dispose();
+				if (testFailed) {
+					console.log(result);
+				}
+			});
+
+			return tsxProcess;
+		},
+
+		cjsPatched: (
+			args: string[],
+			cwd?: string,
+		) => execaNode(args[0], args.slice(1), {
+			cwd,
+			nodePath: node.path,
+			nodeOptions: ['--require', cjsPatchPath],
+		}),
+
+		hook: (
+			args: string[],
+			cwd?: string,
+		) => execaNode(args[0], args.slice(1), {
+			cwd,
+			nodePath: node.path,
+			nodeOptions: [hookFlag, hookPath],
+		}),
+	};
+};
+
+export type NodeApis = Awaited<ReturnType<typeof createNode>>;
