@@ -1,0 +1,24 @@
+## 1.0.0 (2026-07-28)
+* Add unit tests for hook resolution, node features, run execution, transform cache, and utilities (6908ca0986da812cff0aef9566915b0b5b0bb048)
+- Implement unit tests for hook resolution in `unit-hook-resolve.ts` to validate tsnode protocol requests and namespace handling.
+- Create tests for node features in `unit-node-features.ts`, covering feature support checks based on Node.js versions.
+- Add tests in `unit-run.ts` to ensure correct environment variable handling and process spawning during execution.
+- Introduce `unit-transform-cache.ts` to test caching behavior for transform operations, including memory and disk interactions.
+- Develop `unit-transform-index.ts` and `unit-transform-options.ts` to validate type stripping and transformation options.
+- Implement `unit-tsconfig.ts` to test loading and resolving TypeScript configuration files.
+- Create comprehensive utility tests in `unit-utilities.ts` for various utility functions, including path handling and JSON reading.
+- Add capability checks in `utils/node-capabilities.ts` to assess Node.js feature availability.
+- Introduce `utils/outdent.ts` for handling multiline string indentation.
+- Configure Vitest in `vitest.config.ts` for test execution and coverage reporting.
+
+* replace with ESM-only fork of tsx (28e0aab7311b415e53a4dfe15b65c6e8c9bbfc01)
+- Fork of privatenumber/tsx with all CommonJS module handling removed
+- Perf: O(1) Map-indexed lazy disk cache (no startup readdirSync)
+- Perf: WeakMap-cached tsconfigRaw stringification in transform hash
+- Perf: removed hot-path debug log allocations in resolve/load hooks
+- Eval mode (-e) now always ESM via --input-type=module
+- Rebranded as @d1g1tal/tsnode v1.0.0 with tsx attribution (MIT)
+
+* initial commit (037ff9f477fec457707d514e7e42c29437162933)
+* update CLI integration tests to use TypeScript source with resolve hook (c217f0d461a95442ae5699872bf5a4576bee908f)
+* **release:** update the publish workflow (70a783c56b49f7f55a8e73be4c7bde4547bc8d02)
