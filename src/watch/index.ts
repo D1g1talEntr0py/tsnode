@@ -1,128 +1,183 @@
-import type { ChildProcess } from 'node:child_process';
+import { isAbsolute, join, relative, matchesGlob } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as osConstants } from 'node:os';
-import path from 'node:path';
-import { command } from 'cleye';
-import { watch } from 'chokidar';
-import { lightMagenta, lightGreen, yellow } from 'kolorist';
-import { run } from '../run.js';
-import {
-	removeArgvFlags,
-	ignoreAfterArgument,
-} from '../remove-argv-flags.js';
-import { createIpcServer } from '../utils/ipc/server.js';
-import {
-	clearScreen,
-	debounce,
-	log,
-} from './utils.js';
+import { parseArgs } from 'node:util';
+import { Watchr } from '@d1g1tal/watchr';
+import { lightMagenta, lightGreen, yellow } from '../utils/ansi';
+import { run } from '../run';
+import { findFirstPositionalIndex, removeArgvFlags, type Flags } from '../remove-argv-flags';
+import { createIpcServer } from '../utils/ipc/server';
+import { clearScreen, debounce, log } from './utils';
+import type { ChildProcess } from 'node:child_process';
 
-const flags = {
-	noCache: {
-		type: Boolean,
-		description: 'Disable caching',
-		default: false,
-	},
-	tsconfig: {
-		type: String,
-		description: 'Custom tsconfig.json path',
-	},
-	clearScreen: {
-		type: Boolean,
-		description: 'Clearing the screen on rerun',
-		default: true,
-	},
-	// Deprecated
-	ignore: {
-		type: [String],
-		description: 'Paths & globs to exclude from being watched (Deprecated: use --exclude)',
-	},
-	include: {
-		type: [String],
-		description: 'Additional paths & globs to watch',
-	},
-	exclude: {
-		type: [String],
-		description: 'Paths & globs to exclude from being watched',
-	},
+type DependencyMessage = {
+	type: 'dependency';
+	path: string;
+};
+
+type WatchEventHandler = (
+	event: string,
+	stats: unknown,
+	targetPath: string,
+	targetPathNext?: string,
+) => void;
+
+type WatchrWithWatchPath = {
+	watchPath: (targetPath: string, options: object, handler: WatchEventHandler) => Promise<void>;
+};
+
+const flags: Flags = {
+	noCache: { type: Boolean },
+	tsconfig: { type: String },
+	clearScreen: { type: Boolean },
+	include: { type: [String] },
+	exclude: { type: [String] },
+	help: { type: Boolean, alias: 'h' }
 } as const;
 
-export const watchCommand = command({
-	name: 'watch',
-	parameters: ['<script path>'],
-	flags,
-	help: {
-		description: 'Run the script and watch for changes',
-	},
+const isString = (entry: unknown): entry is string => typeof entry === 'string';
+const toStringArray = (value: unknown) => {
+	if (!value) { return [] }
 
-	/**
-	 * ignoreAfterArgument needs to parse the first argument
-	 * because cleye will error on missing arguments
-	 *
-	 * Remove once cleye supports error callbacks on missing arguments
-	 */
-	ignoreArgv: ignoreAfterArgument(false),
-}, async (argv) => {
-	const rawArgvs = removeArgvFlags(flags, process.argv.slice(3));
+	return Array.isArray(value) ? value.filter(isString) : typeof value === 'string' ? [ value ] : [];
+};
+
+const printWatchHelp = () => {
+	process.stdout.write('Run the script and watch for changes\n');
+	process.stdout.write('Usage: tsnode watch [options] <script path> [arguments]\n');
+};
+
+const normalizePath = (filePath: string) => filePath.replace(/\\/g, '/');
+
+/** `path.matchesGlob` throws on malformed patterns; treat those as non-matching. */
+const safeMatchesGlob = (filePath: string, pattern: string) => {
+	try { return matchesGlob(filePath, pattern) } catch { return false }
+};
+
+const isDependencyMessage = (data: unknown): data is DependencyMessage => (data !== null && typeof data === 'object' && 'type' in data && data.type === 'dependency' && 'path' in data && typeof data.path === 'string');
+
+export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
+	const firstPositionalIndex = findFirstPositionalIndex(flags, commandArgv);
+	const leadingArgv = firstPositionalIndex === -1 ? commandArgv : commandArgv.slice(0, firstPositionalIndex);
+
+	const { values } = parseArgs({
+		args: leadingArgv,
+		allowPositionals: true,
+		strict: false,
+		options: {
+			'no-cache': { type: 'boolean' },
+			tsconfig: { type: 'string' },
+			'clear-screen': { type: 'boolean' },
+			include: { type: 'string', multiple: true },
+			exclude: { type: 'string', multiple: true },
+			help: { type: 'boolean', short: 'h' }
+		}
+	});
+
+	if (values.help && firstPositionalIndex === -1) {
+		printWatchHelp();
+		return;
+	}
+
+	if (firstPositionalIndex === -1) {
+		process.stderr.write('Error: Missing required parameter "script path"\n');
+		process.exitCode = 1;
+		return;
+	}
+
+	const cwd = process.cwd();
+	const rawArgvFlags = removeArgvFlags(flags, [ ...commandArgv ]);
+	const targetMapper = (target: string) => isAbsolute(target) ? target : join(cwd, target);
 	const options = {
-		noCache: argv.flags.noCache,
-		tsconfigPath: argv.flags.tsconfig,
-		clearScreen: argv.flags.clearScreen,
-		include: argv.flags.include,
-		exclude: [
-			...argv.flags.ignore,
-			...argv.flags.exclude,
-		],
-		ipc: true,
+		noCache: Boolean(values['no-cache']),
+		tsconfigPath: typeof values.tsconfig === 'string' ? values.tsconfig : undefined,
+		clearScreen: values['clear-screen'] ?? true,
+		include: toStringArray(values.include),
+		exclude: toStringArray(values.exclude),
+		ipc: true
+	};
+
+	// [ scriptPath, ...options.include ] are the initial watch targets. If any of those files are deleted, the watcher will stop watching them.
+	// However, if the script imports other files, those will be watched as well (see onWatchEvent).
+	const watchTargets = [ commandArgv.slice(firstPositionalIndex)[0], ...options.include ].map(targetMapper);
+
+	const isIgnoredPath = (targetPath: string) => {
+		const normalizedPath = normalizePath(targetPath);
+
+		// Hidden directories and files
+		if (normalizedPath.split('/').some(segment => segment.startsWith('.') && segment.length > 1)) {
+			return true;
+		}
+
+		// 3rd party packages
+		if (normalizedPath.includes('/node_modules/') || normalizedPath.includes('/bower_components/') || normalizedPath.includes('/vendor/')) {
+			return true;
+		}
+
+		for (const excludePattern of options.exclude) {
+			const normalizedPattern = normalizePath(excludePattern);
+			const absolutePattern = normalizePath(isAbsolute(excludePattern) ? excludePattern : join(cwd, excludePattern));
+
+			if (safeMatchesGlob(normalizedPath, normalizedPattern) || safeMatchesGlob(normalizedPath, absolutePattern)) {
+				return true;
+			}
+		}
+
+		return false;
 	};
 
 	let runProcess: ChildProcess | undefined;
 	let exiting = false;
+	const runtimeDependencyPaths = new Set<string>();
+	let reRun: (event?: string, filePath?: string) => void | Promise<void> = () => {};
 
 	const server = await createIpcServer();
+	const onWatchEvent: WatchEventHandler = (event: string, _stats: unknown, targetPath: string, targetPathNext?: string) => {
+		const changedPath = targetPathNext ?? targetPath;
+		const relativePath = relative(cwd, changedPath);
+
+		void reRun(event, relativePath.length > 0 && !relativePath.startsWith('..') ? relativePath : changedPath);
+	};
+	const watchrOptions = { ignoreInitial: true, ignore: isIgnoredPath, recursive: true };
+	const watcher = new Watchr(watchTargets, watchrOptions, onWatchEvent);
 
 	server.on('data', (data) => {
 		// Collect run-time dependencies to watch
-		if (
-			data
-			&& typeof data === 'object'
-			&& 'type' in data
-			&& data.type === 'dependency'
-			&& 'path' in data
-			&& typeof data.path === 'string'
-		) {
-			const dependencyPath = (
-				data.path.startsWith('file:')
-					? fileURLToPath(data.path)
-					: data.path
-			);
+		if (isDependencyMessage(data)) {
+			const dependencyPath = data.path.startsWith('file:') ? fileURLToPath(data.path) : data.path;
 
-			if (path.isAbsolute(dependencyPath)) {
-				watcher.add(dependencyPath);
+			if (isAbsolute(dependencyPath)) {
+				if (!runtimeDependencyPaths.has(dependencyPath) && !isIgnoredPath(dependencyPath)) {
+					runtimeDependencyPaths.add(dependencyPath);
+					// TODO - Make Watchr.watchPath() public and use it here instead of casting to unknown
+					void (watcher as unknown as WatchrWithWatchPath).watchPath(dependencyPath, watchrOptions, onWatchEvent);
+				}
 			}
 		}
 	});
 
 	const spawnProcess = () => {
-		if (exiting) {
-			return;
-		}
+		if (exiting) { return }
 
-		return run(rawArgvs, options);
+		return run(rawArgvFlags, options);
 	};
 
 	let waitingChildExit = false;
 
-	const killProcess = async (
-		childProcess: ChildProcess,
-		signal: NodeJS.Signals = 'SIGTERM',
-		forceKillOnTimeout = 5000,
-	) => {
+	const killProcess = async (childProcess: ChildProcess, signal: NodeJS.Signals = 'SIGTERM', forceKillOnTimeout = 5000) => {
 		let exited = false;
+		const forceKillTimer: NodeJS.Timeout = setTimeout(() => {
+			if (!exited) {
+				log(yellow(`Process didn't exit in ${Math.floor(forceKillOnTimeout / 1000)}s. Force killing...`));
+				childProcess.kill('SIGKILL');
+			}
+		}, forceKillOnTimeout);
+
 		const waitForExit = new Promise<number | null>((resolve) => {
-			childProcess.on('exit', (exitCode) => {
+			childProcess.once('exit', (exitCode) => {
 				exited = true;
 				waitingChildExit = false;
+				clearTimeout(forceKillTimer);
 				resolve(exitCode);
 			});
 		});
@@ -130,18 +185,11 @@ export const watchCommand = command({
 		waitingChildExit = true;
 		childProcess.kill(signal);
 
-		setTimeout(() => {
-			if (!exited) {
-				log(yellow(`Process didn't exit in ${Math.floor(forceKillOnTimeout / 1000)}s. Force killing...`));
-				childProcess.kill('SIGKILL');
-			}
-		}, forceKillOnTimeout);
-
-		return await waitForExit;
+		return waitForExit;
 	};
 
-	const reRun = debounce(async (event?: string, filePath?: string) => {
-		const reason = event ? `${event ? lightMagenta(event) : ''}${filePath ? ` in ${lightGreen(`./${filePath}`)}` : ''}` : '';
+	reRun = debounce(async (event?: string, filePath?: string) => {
+		const reason = event ? `${lightMagenta(event)}${filePath ? ` in ${lightGreen(`./${filePath}`)}` : ''}` : '';
 
 		if (waitingChildExit) {
 			log(reason, yellow('Process hasn\'t exited. Killing process...'));
@@ -159,9 +207,7 @@ export const watchCommand = command({
 				log(reason, yellow('Rerunning...'));
 			}
 
-			if (options.clearScreen) {
-				process.stdout.write(clearScreen);
-			}
+			if (options.clearScreen) { process.stdout.write(clearScreen) }
 		}
 
 		runProcess = spawnProcess();
@@ -179,19 +225,9 @@ export const watchCommand = command({
 				log(yellow('Previous process hasn\'t exited yet. Force killing...'));
 			}
 
-			killProcess(
-				runProcess,
-				// Second Ctrl+C force kills
-				waitingChildExit ? 'SIGKILL' : signal,
-			).then(
-				(exitCode) => {
-					// eslint-disable-next-line n/no-process-exit
-					process.exit(exitCode ?? 0);
-				},
-				() => {},
-			);
+			// Second Ctrl+C force kills
+			killProcess(runProcess, waitingChildExit ? 'SIGKILL' : signal).then((exitCode) => process.exit(exitCode ?? 0), () => {});
 		} else {
-			// eslint-disable-next-line n/no-process-exit
 			process.exit(osConstants.signals[signal]);
 		}
 	};
@@ -207,30 +243,6 @@ export const watchCommand = command({
 	 *
 	 * As an alternative, we watch cwd and all run-time dependencies
 	 */
-	const watcher = watch(
-		[
-			...argv._,
-			...options.include,
-		],
-		{
-			cwd: process.cwd(),
-			ignoreInitial: true,
-			ignored: [
-				// Hidden directories like .git
-				'**/.*/**',
-
-				// Hidden files (e.g. logs or temp files)
-				'**/.*',
-
-				// 3rd party packages
-				'**/{node_modules,bower_components,vendor}/**',
-
-				...options.exclude,
-			],
-			ignorePermissionErrors: true,
-		},
-	).on('all', reRun);
-
 	// On "Return" key
 	process.stdin.on('data', () => reRun('Return key'));
-});
+};

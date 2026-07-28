@@ -1,44 +1,25 @@
-// Deprecated: Delete entry-point in next major in favor of patch-repl.ts
+import { transform } from 'esbuild';
+import repl, { type REPLServer, type REPLEval } from 'node:repl';
 
-import repl, { type REPLEval } from 'node:repl';
-import { version } from '../package.json';
-import { transform } from './utils/transform/index.js';
+const patchEval = (nodeRepl: REPLServer) => {
+	const { eval: defaultEval } = nodeRepl;
+	const preEval: REPLEval = async function(code, context, sourcefile, callback) {
+		const options = {
+			sourcefile, loader: 'ts', tsconfigRaw: { compilerOptions: { preserveValueImports: true } }, define: { require: 'global.require' }
+		} satisfies Parameters<typeof transform>[1];
 
-// Copied from
-// https://github.com/nodejs/node/blob/v18.2.0/lib/internal/main/repl.js#L37
-console.log(
-	`Welcome to tsx v${version} (Node.js ${process.version}).\n`
-      + 'Type ".help" for more information.',
-);
+		try { ({ code } = (await transform(code, options))) } catch {}
 
-const nodeRepl = repl.start();
+		return defaultEval.call(this, code, context, sourcefile, callback);
+	};
 
-const { eval: defaultEval } = nodeRepl;
+	// @ts-expect-error overwriting read-only property
+	nodeRepl.eval = preEval;
 
-const preEval: REPLEval = async function (code, context, filename, callback) {
-	const transformed = await transform(
-		code,
-		filename,
-		{
-			loader: 'ts',
-			tsconfigRaw: {
-				compilerOptions: {
-					preserveValueImports: true,
-				},
-			},
-			define: {
-				require: 'global.require',
-			},
-		},
-	).catch(
-		(error) => {
-			console.log(error.message);
-			return { code: '\n' };
-		},
-	);
-
-	return defaultEval.call(this, transformed.code, context, filename, callback);
+	return nodeRepl;
 };
 
-// @ts-expect-error overriding read-only property
-nodeRepl.eval = preEval;
+const { start } = repl;
+repl.start = function() {
+	return patchEval(Reflect.apply(start, this, arguments));
+};

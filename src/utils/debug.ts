@@ -1,80 +1,32 @@
-import { inspect } from 'node:util';
 import { writeSync } from 'node:fs';
-import {
-	options, bgBlue, black, bgLightYellow, bgGray,
-} from 'kolorist';
+import { createRequire } from 'node:module';
+import { setColorEnabled, bgBlue, bgGray } from './ansi';
 
-export const debugEnabled = Number(process.env.TSX_DEBUG);
+export const debugEnabled = Number(process.env['TSNODE_DEBUG']);
 
 // Force colors in debug mode
-if (debugEnabled) {
-	options.enabled = true;
-	options.supportLevel = 3;
-}
+if (debugEnabled) { setColorEnabled(true) }
 
-const createLog = (
-	name: string,
-) => (
-	level: number,
-	...args: any[]
-) => {
-	if (!debugEnabled) {
-		return;
-	}
+/**
+ * Loaded on demand. `node:util` costs ~3ms to initialize and this module sits in
+ * the loader graph, so importing it eagerly taxed every run to support output
+ * that is only produced when TSNODE_DEBUG is set.
+ */
+let inspect: typeof import('node:util').inspect | undefined;
 
-	if (level > debugEnabled) {
-		return;
-	}
+const loadInspect = () => {
+	inspect ??= createRequire(import.meta.url)('node:util').inspect as typeof import('node:util').inspect;
 
-	const prefix = `${bgGray(` tsx P${process.pid} `)} ${name}`;
-	const logMessage = args.map(argumentElement => (
-		typeof argumentElement === 'string'
-			? argumentElement
-			: inspect(argumentElement, { colors: true })
-	)).join(' ');
-
-	writeSync(
-		1,
-		`${prefix} ${logMessage}\n`,
-	);
+	return inspect;
 };
 
-export const logCjs = createLog(bgLightYellow(black(' CJS ')));
+const createLog = (name: string) => (level: number, ...args: any[]) => {
+	if (!debugEnabled || level > debugEnabled) { return }
+
+	const inspectValue = loadInspect();
+	const logMessage = args.map(argumentElement => typeof argumentElement === 'string' ? argumentElement : inspectValue(argumentElement, { colors: true })).join(' ');
+
+	writeSync(1, `${`${bgGray(` tsnode P${process.pid} `)} ${name}`} ${logMessage}\n`);
+};
+
 export const logEsm = createLog(bgBlue(' ESM '));
-
-export const time = <T extends (...args: any[]) => unknown>(
-	name: string,
-	_function: T,
-	threshold = 100,
-): T => function (
-		this: unknown,
-		...args: Parameters<T>
-	) {
-		const timeStart = Date.now();
-		const logTimeElapsed = () => {
-			const elapsed = Date.now() - timeStart;
-
-			if (elapsed > threshold) {
-				console.log(name, {
-					args,
-					elapsed,
-				});
-			}
-		};
-
-		const result = Reflect.apply(_function, this, args);
-		if (
-			result
-		&& typeof result === 'object'
-		&& 'then' in result
-		) {
-			(result as Promise<unknown>).then(
-				logTimeElapsed,
-				// Ignore error in this chain
-				() => {},
-			);
-		} else {
-			logTimeElapsed();
-		}
-		return result;
-	} as T;

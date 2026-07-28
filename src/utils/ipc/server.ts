@@ -1,14 +1,12 @@
-import net from 'node:net';
-import fs from 'node:fs';
-import { tmpdir } from '../temporary-directory.js';
-import { isWindows } from '../is-windows.js';
-import { getPipePath } from './get-pipe-path.js';
+import { createServer } from 'node:net';
+import { rmSync } from 'node:fs';
+import { mkdir, rm } from 'node:fs/promises';
+import { tmpdir } from '../temporary-directory';
+import { isWindows, getPipePath } from './get-pipe-path';
 
 type OnMessage = (message: Buffer) => void;
 
-const bufferData = (
-	onMessage: OnMessage,
-) => {
+const bufferData = (onMessage: OnMessage) => {
 	let buffer = Buffer.alloc(0);
 	return (data: Buffer) => {
 		buffer = Buffer.concat([buffer, data]);
@@ -16,26 +14,22 @@ const bufferData = (
 		while (buffer.length > 4) {
 			const messageLength = buffer.readInt32BE(0);
 			if (buffer.length >= 4 + messageLength) {
-				const message = buffer.slice(4, 4 + messageLength);
-				onMessage(message);
-				buffer = buffer.slice(4 + messageLength);
+				onMessage(buffer.subarray(4, 4 + messageLength));
+				buffer = buffer.subarray(4 + messageLength);
 			} else {
 				break;
 			}
 		}
-	};
+	}
 };
 
 export const createIpcServer = async () => {
-	const server = net.createServer((socket) => {
-		socket.on('data', bufferData((message: Buffer) => {
-			const data = JSON.parse(message.toString());
-			server.emit('data', data);
-		}));
+	const server = createServer((socket) => {
+		socket.on('data', bufferData((message: Buffer) => server.emit('data', JSON.parse(message.toString()))));
 	});
 
 	const pipePath = getPipePath(process.pid);
-	await fs.promises.mkdir(tmpdir, { recursive: true });
+	await mkdir(tmpdir, { recursive: true });
 
 	/**
 	 * Fix #457 (https://github.com/privatenumber/tsx/issues/457)
@@ -47,9 +41,7 @@ export const createIpcServer = async () => {
 	 * We can safely delete the pipe file, the previous process must has been closed,
 	 * as pid is unique at the same.
 	 */
-	await fs.promises.rm(pipePath, {
-		force: true,
-	});
+	await rm(pipePath, { force: true });
 
 	await new Promise<void>((resolve, reject) => {
 		server.listen(pipePath, resolve);
@@ -75,9 +67,7 @@ export const createIpcServer = async () => {
 		 * sockets, Windows will close and remove the pipe when the owning process exits.
 		 */
 		if (!isWindows) {
-			try {
-				fs.rmSync(pipePath);
-			} catch {}
+			try { rmSync(pipePath) } catch {}
 		}
 	});
 

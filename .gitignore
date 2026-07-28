@@ -1,6 +1,3 @@
-# macOS
-.DS_Store
-
 # Logs
 logs
 *.log
@@ -11,6 +8,9 @@ lerna-debug.log*
 
 # Dependency directories
 node_modules
+
+# Coverage directory used by tools like istanbul
+tests/coverage
 
 # Output of 'npm pack'
 *.tgz

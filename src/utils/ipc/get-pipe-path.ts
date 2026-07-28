@@ -1,12 +1,9 @@
 import path from 'node:path';
-import { tmpdir } from '../temporary-directory.js';
-import { isWindows } from '../is-windows.js';
+import { tmpdir } from '../temporary-directory';
+
+export const isWindows = process.platform === 'win32';
 
 export const getPipePath = (processId: number) => {
 	const pipePath = path.join(tmpdir, `${processId}.pipe`);
-	return (
-		isWindows
-			? `\\\\?\\pipe\\${pipePath}`
-			: pipePath
-	);
+	return isWindows ? `\\\\?\\pipe\\${pipePath}` : pipePath;
 };

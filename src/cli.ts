@@ -1,49 +1,21 @@
-import { constants as osConstants } from 'node:os';
-import type { ChildProcess, Serializable } from 'node:child_process';
+import { constants } from 'node:os';
+import { enableCompileCache } from 'node:module';
 import type { Server } from 'node:net';
-import { cli } from 'cleye';
-import {
-	transformSync as esbuildTransformSync,
-} from 'esbuild';
-import { version } from '../package.json';
-import { run } from './run.js';
-import { watchCommand } from './watch/index.js';
-import {
-	removeArgvFlags,
-	ignoreAfterArgument,
-} from './remove-argv-flags.js';
-import { isFeatureSupported, testRunnerGlob } from './utils/node-features.js';
-import { createIpcServer } from './utils/ipc/server.js';
+import type { Flags } from './remove-argv-flags';
+import type { ParseArgsOptionsConfig } from 'node:util';
+import type { ChildProcess, Serializable } from 'node:child_process';
+import { normalizeFileUrlPath, resolveEntrypointPath } from './utils/path-utils';
 
-// const debug = (...messages: any[]) => {
-// 	if (process.env.DEBUG) {
-// 		console.log(...messages);
-// 	}
-// };
+if (typeof enableCompileCache === 'function' && process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
+	try { enableCompileCache() } catch {}
+}
 
-const relaySignals = (
-	childProcess: ChildProcess,
-	ipcSocket: Server,
-) => {
-	let waitForSignal: undefined | ((signal: NodeJS.Signals) => void);
+const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
+	let waitForSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
-	ipcSocket.on(
-		'data',
-		(
-			data: {
-				type: string;
-				signal: NodeJS.Signals;
-			},
-		) => {
-			if (
-				data
-				&& data.type === 'signal'
-				&& waitForSignal
-			) {
-				waitForSignal(data.signal);
-			}
-		},
-	);
+	ipcSocket.on('data', (data: { type: string, signal: NodeJS.Signals }) => {
+		if (data?.type === 'signal' && waitForSignal) { waitForSignal(data.signal) }
+	});
 
 	/**
 	 * Wait for signal from preflight bindHiddenSignalsHandler
@@ -52,25 +24,18 @@ const relaySignals = (
 	 * the signal
 	 */
 	const waitForSignalFromChild = () => {
-		const p = new Promise<NodeJS.Signals | undefined>((resolve) => {
-			// Aribrary timeout based on flaky tests
+		const signalWaitPromise = new Promise<NodeJS.Signals | undefined>((resolve) => {
+			// Small timeout keeps Ctrl+C responsive when the child is hung.
 			setTimeout(() => resolve(undefined), 30);
 			waitForSignal = resolve;
 		});
 
-		p.then(
-			() => {
-				waitForSignal = undefined;
-			},
-			() => {},
-		);
+		signalWaitPromise.then(() => waitForSignal = undefined, () => {});
 
-		return p;
+		return signalWaitPromise;
 	};
 
-	const relaySignalToChild = async (
-		signal: NodeJS.Signals,
-	) => {
+	const relaySignalToChild = async (signal: NodeJS.Signals) => {
 		/**
 		 * This callback is triggered if the parent receives a signal
 		 *
@@ -81,29 +46,18 @@ const relaySignals = (
 		 * tell the parent if it also received a signal which we wait for here
 		 */
 		const signalFromChild = await waitForSignalFromChild();
-
-		// debug({
-		// 	signalFromChild,
-		// });
-
 		/**
 		 * If child didn't receive a signal, it's either because it was
 		 * sent to the parent directly via kill PID or the child is
 		 * unresponsive (e.g. infinite loop). Relay signal to child.
 		 */
 		if (signalFromChild !== signal) {
-			// debug('killing child', {
-			// 	signal,
-			// });
 			childProcess.kill(signal);
 
-			/**
-			 * If child is unresponsive (e.g. infinite loop), we need to force kill it
-			 */
-			const isChildResponsive = await waitForSignalFromChild();
-			if (isChildResponsive !== signal) {
+			// If child is unresponsive (e.g. infinite loop), we need to force kill it
+			if ((await waitForSignalFromChild()) !== signal) {
 				// This seems to run before the handler registered at the bottom of this file
-				// Seems the lastest handler is called first
+				// Seems the latest handler is called first
 				childProcess.on('exit', () => {
 					/**
 					 * Even though this may not be a SIGKILL, I've confirmed Ctrl+C on an infinite looping
@@ -117,11 +71,10 @@ const relaySignals = (
 					 * For example, signal SIGABRT has value 6, so the expected exit code will be 128 + 6,
 					 * or 134.
 					 */
-					const exitCode = osConstants.signals[signal];
-					process.exit(128 + exitCode);
+					process.exit(128 + constants.signals[signal]);
 				});
 
-				childProcess.kill('SIGKILL');
+				childProcess.kill(constants.signals.SIGKILL);
 			}
 		}
 	};
@@ -130,139 +83,158 @@ const relaySignals = (
 	process.on('SIGTERM', relaySignalToChild);
 };
 
-const tsxFlags = {
-	noCache: {
-		type: Boolean,
-		description: 'Disable caching',
-	},
-	tsconfig: {
-		type: String,
-		description: 'Custom tsconfig.json path',
-	},
+const tsnodeFlags = {
+	noCache: { type: Boolean },
+	tsconfig: { type: String }
+} as const satisfies Flags;
+
+const topLevelFlags = {
+	...tsnodeFlags,
+	version: { type: Boolean, alias: 'v' },
+	help: { type: Boolean, alias: 'h' }
+} as const satisfies Flags;
+
+const executionFlags = {
+	...topLevelFlags,
+	inputType: { type: String },
+	test: { type: Boolean },
+	eval: { type: String, alias: 'e' },
+	print: { type: String, alias: 'p' },
+} as const satisfies Flags;
+
+const parseArgOptions = {
+	'no-cache': { type: 'boolean' },
+	tsconfig: { type: 'string' },
+	version: { type: 'boolean', short: 'v' },
+	help: { type: 'boolean', short: 'h' },
+	'input-type': { type: 'string' },
+	test: { type: 'boolean' },
+	eval: { type: 'string', short: 'e' },
+	print: { type: 'string', short: 'p' },
+} as const satisfies ParseArgsOptionsConfig;
+
+type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {
+	[Name in keyof Options]?: Options[Name] extends { type: 'string' } ? string : Options[Name] extends { type: 'boolean' } ? boolean : never;
 };
 
-cli({
-	name: 'tsnode',
-	parameters: ['[script path]'],
-	commands: [
-		watchCommand,
-	],
-	flags: {
-		...tsxFlags,
-		version: {
-			type: Boolean,
-			alias: 'v',
-			description: 'Show version',
-		},
-		help: {
-			type: Boolean,
-			alias: 'h',
-			description: 'Show help',
-		},
-	},
-	help: false,
-	ignoreArgv: ignoreAfterArgument(),
-}, async (argv) => {
-	if (argv.flags.version) {
+type ParsedCliValues = CliValuesFromParseOptions<typeof parseArgOptions>;
+
+const parseCliValues = async (args: string[]) => {
+	const { parseArgs } = await import('node:util');
+
+	return parseArgs({ args, allowPositionals: true, strict: false, options: parseArgOptions }).values as ParsedCliValues;
+};
+
+type EvalType = Extract<keyof ParsedCliValues, 'eval' | 'print'>;
+
+const getEvalInput = (values: ParsedCliValues) => {
+	for (const type of [ 'print', 'eval' ] as const satisfies EvalType[]) {
+		const code = values[type];
+		if (code !== undefined) { return { type, code } }
+	}
+
+	return undefined;
+};
+
+const printHelp = () => {
+	process.stdout.write('Node.js runtime enhanced with esbuild for loading TypeScript & ESM\n');
+	process.stdout.write('Usage: tsnode [script path] [arguments]\n');
+};
+
+const rawArgv = process.argv.slice(2);
+
+if (rawArgv[0] === 'watch') {
+	const { runWatchCommand } = await import('./watch/index.js');
+	await runWatchCommand(rawArgv.slice(1));
+	process.exitCode ??= 0;
+} else {
+	const { findFirstPositionalIndex } = await import('./remove-argv-flags');
+	const firstPositionalIndex = findFirstPositionalIndex(executionFlags, rawArgv);
+
+	// `tsnode <script>` with no leading flags has nothing to parse. Skipping the
+	// call also keeps `node:util` (~3ms to initialize) out of the common path.
+	const flagArgv = firstPositionalIndex === -1 ? rawArgv : rawArgv.slice(0, firstPositionalIndex);
+	const values: ParsedCliValues = flagArgv.length === 0 ? {} : await parseCliValues(flagArgv);
+
+	if (values.version) {
+		// JSON modules only expose a default export; destructuring `version` directly off the namespace yields undefined.
+		const { default: { version } } = await import('../package.json', { with: { type: 'json' } });
 		process.stdout.write(`tsnode v${version}\nnode `);
-	} else if (argv.flags.help) {
-		argv.showHelp({
-			description: 'Node.js runtime enhanced with esbuild for loading TypeScript & ESM',
-		});
+	} else if (values.help) {
+		printHelp();
 		console.log(`${'-'.repeat(45)}\n`);
 	}
 
-	const interceptFlags = {
-		eval: {
-			type: String,
-			alias: 'e',
-		},
-		print: {
-			type: String,
-			alias: 'p',
-		},
-	} as const;
+	const argvFlagsToRun = (await import('./remove-argv-flags')).removeArgvFlags({ ...tsnodeFlags, eval: { type: String, alias: 'e' }, print: { type: String, alias: 'p' } });
 
-	const {
-		_: firstArgs,
-		flags: interceptedFlags,
-	} = cli({
-		flags: {
-			...interceptFlags,
-			inputType: String,
-			test: Boolean,
-		},
-		help: false,
-		ignoreArgv: ignoreAfterArgument(false),
-	});
+	const evalInput = getEvalInput(values);
 
-	const argvsToRun = removeArgvFlags({
-		...tsxFlags,
-		...interceptFlags,
-	});
+	if (evalInput) {
+		// Lazy import so the CLI parent process doesn't pay esbuild's module init cost on every run (transforms happen in the child process)
+		const transformed = (await import('esbuild')).transformSync(evalInput.code, { loader: 'ts', sourcefile: '/eval.ts', ...(evalInput.type === 'eval' ? { format: 'esm' as const } : {}) });
 
-	const evalTypes = ['print', 'eval'] as const;
-	const evalType = evalTypes.find(type => Boolean(interceptedFlags[type]));
-	if (evalType) {
-		const { inputType } = interceptedFlags;
-		const evalCode = interceptedFlags[evalType]!;
-		const transformed = esbuildTransformSync(
-			evalCode,
-			{
-				loader: 'default',
-				sourcefile: '/eval.ts',
-				format: 'esm',
-			},
-		);
-
-		argvsToRun.unshift(`--${evalType}`, transformed.code);
-		if (inputType !== 'module') {
-			argvsToRun.unshift('--input-type=module');
-		}
+		argvFlagsToRun.unshift(`--${evalInput.type}`, transformed.code);
+		if (evalInput.type === 'eval' && values['input-type'] !== 'module') { argvFlagsToRun.unshift('--input-type=module') }
 	}
 
 	// Default --test glob to find TypeScript files
-	if (
-		isFeatureSupported(testRunnerGlob)
-		&& interceptedFlags.test
-		&& firstArgs.length === 0
-	) {
-		argvsToRun.push('**/{test,test/**/*,test-*,*[.-_]test}.?(c|m)@(t|j)s');
+	if (values.test && firstPositionalIndex === -1) { argvFlagsToRun.push('**/{test,test/**/*,test-*,*[.-_]test}.?(c|m)@(t|j)s') }
+
+	const { run } = await import('./run');
+
+	/**
+	 * Forking exists to apply Node flags and `--import` preloads at bootstrap, and to relay signals/IPC.
+	 * When none of that is needed the entry can run in this process and skip an entire Node bootstrap.
+	 *
+	 * Deliberately conservative: anything that needs real bootstrap flags, a separate process, or argv rewriting still forks.
+	 */
+	const [ firstRunArgument ] = argvFlagsToRun;
+	const normalizedFirstRunArgument = firstRunArgument && !firstRunArgument.startsWith('-') ? normalizeFileUrlPath(firstRunArgument) : firstRunArgument;
+	const resolvedEntrypointPath = normalizedFirstRunArgument && !normalizedFirstRunArgument.startsWith('-') ? resolveEntrypointPath(normalizedFirstRunArgument) : undefined;
+
+	if (normalizedFirstRunArgument !== firstRunArgument && normalizedFirstRunArgument !== undefined) {
+		argvFlagsToRun[0] = normalizedFirstRunArgument;
 	}
 
-	const ipc = await createIpcServer();
+	/**
+	 * The following conditions must be met to run in-process:
+	 * - ts-node is not disabled via TSNODE_DISABLE_IN_PROCESS
+	 * - No top-level flags that require a fork (version, help)
+	 * - No eval/print flags that rewrite argv into flags that must be set at bootstrap
+	 * - No test flag that rewrites argv into a glob that must be set at bootstrap
+	 * - A script path is provided (not REPL or stdin)
+	 * - The first argument is not a leading Node flag (e.g. --inspect, --experimental-*)
+	 * - The parent process does not expect to exchange IPC messages with a child
+	 * - The first argument is a plain file (not a directory or extension-less entry)
+	 */
+	const canRunInProcess = (process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && normalizedFirstRunArgument !== undefined && !normalizedFirstRunArgument.startsWith('-') && !process.send && resolvedEntrypointPath !== undefined);
+	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && evalInput?.type === 'eval' && !values.test && !process.send && !argvFlagsToRun.some((argument) => argument.startsWith('-'));
 
-	const childProcess = run(
-		argvsToRun,
-		{
-			noCache: Boolean(argv.flags.noCache),
-			tsconfigPath: argv.flags.tsconfig,
-		},
-	);
+	if (canRunInProcess) {
+		// Consumed at module-init time by the cache and tsconfig loaders, so it must be set before the loader graph is imported.
+		if (values['no-cache']) { process.env['TSNODE_DISABLE_CACHE'] = '1' }
+		if (typeof values.tsconfig === 'string') { process.env['TSNODE_TSCONFIG_PATH'] = values.tsconfig }
 
-	relaySignals(childProcess, ipc);
+		const { runInProcess } = await import('./run-in-process');
+		await runInProcess(argvFlagsToRun, resolvedEntrypointPath);
+	} else if (canRunEvalInProcess) {
+		const { runEvalInProcess } = await import('./run-eval-in-process');
+		await runEvalInProcess(argvFlagsToRun.shift()!, argvFlagsToRun);
+	} else {
+		const shouldRelaySignals = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
+		const ipc = shouldRelaySignals ? await import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
 
-	if (process.send) {
-		childProcess.on('message', (message) => {
-			process.send!(message);
-		});
+		const childProcess = run(argvFlagsToRun, { noCache: Boolean(values['no-cache']), signalRelay: shouldRelaySignals, tsconfigPath: values.tsconfig });
+
+		if (ipc) { relaySignals(childProcess, ipc) }
+
+		const sendToParent = process.send;
+		if (sendToParent !== undefined) { childProcess.on('message', (message) => sendToParent(message)) }
+
+		if (childProcess.send) { process.on('message', (message) => childProcess.send(message as Serializable)) }
+
+		// If there's no exit code, it's likely killed by a signal
+		// https://nodejs.org/api/process.html#process_exit_codes
+		childProcess.on('close', (exitCode) => process.exit(exitCode ?? constants.signals[childProcess.signalCode!] + 128));
 	}
-
-	if (childProcess.send) {
-		process.on('message', (message) => {
-			childProcess.send(message as Serializable);
-		});
-	}
-
-	childProcess.on(
-		'close',
-		(exitCode) => {
-			// If there's no exit code, it's likely killed by a signal
-			// https://nodejs.org/api/process.html#process_exit_codes
-			if (exitCode === null) {
-				exitCode = osConstants.signals[childProcess.signalCode!] + 128;
-			}
-			process.exit(exitCode);
-		},
-	);
-});
+}

@@ -1,0 +1,13 @@
+export declare const isRelativePath: (request: string) => boolean;
+export declare const isFilePath: (request: string) => boolean;
+export declare const requestAcceptsQuery: (request: string) => "" | boolean | undefined;
+export declare const fileUrlPrefix = "file://";
+export declare const normalizeFileUrlPath: (request: string) => string;
+export declare const resolveEntrypointPath: (request: string) => string | undefined;
+export declare const tsExtensions: string[];
+export declare const tsExtensionsPattern: RegExp;
+export declare const implicitTsExtensionsPattern: RegExp;
+export declare const isJsonPattern: RegExp;
+export declare const isDirectoryPattern: RegExp;
+export declare const isBarePackageNamePattern: RegExp;
+export declare const nodeModulesPath: string;
