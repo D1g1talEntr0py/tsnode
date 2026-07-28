@@ -5,7 +5,8 @@ import { describe, expect, test } from 'vitest';
 import { createFixture } from 'fs-fixture';
 
 const projectRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
-const cliPath = path.join(projectRoot, 'dist/cli.js');
+const cliPath = path.join(projectRoot, 'src/cli.ts');
+const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
 
 const tsconfigForFixture = {
 	'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'esnext', module: 'esnext' } }),
@@ -40,9 +41,10 @@ const runCli = (
 	cwd: string,
 	env?: Record<string, string>,
 ) => {
+	const nodeOptions = [process.env.NODE_OPTIONS, '--experimental-strip-types', '--import', sourceResolveHookPath].filter(Boolean).join(' ');
 	const childProcess = spawn(process.execPath, [cliPath, ...args], {
 		cwd,
-		env: { ...process.env, ...env },
+		env: { ...process.env, NODE_OPTIONS: nodeOptions, ...env },
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 
