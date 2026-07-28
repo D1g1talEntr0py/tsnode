@@ -1,3 +1,7 @@
+## [1.0.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.0.0...v1.0.1) (2026-07-28)
+* **deps:** fixes CWE-22 - Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal') (c27f5a34c9d8f96e05c596eb7c0a55d274697443)
+The product uses external input to construct a pathname that is intended to identify a file or directory that is located underneath a restricted parent directory, but the product does not properly neutralize special elements within the pathname that can cause the pathname to resolve to a location that is outside of the restricted directory.
+
 ## 1.0.0 (2026-07-28)
 * Add unit tests for hook resolution, node features, run execution, transform cache, and utilities (6908ca0986da812cff0aef9566915b0b5b0bb048)
 - Implement unit tests for hook resolution in `unit-hook-resolve.ts` to validate tsnode protocol requests and namespace handling.
