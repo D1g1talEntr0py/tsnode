@@ -1,6 +1,5 @@
 import { createServer } from 'node:net';
-import { rmSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from '../temporary-directory';
 import { isWindows, getPipePath } from './get-pipe-path';
 
@@ -29,7 +28,9 @@ export const createIpcServer = async () => {
 	});
 
 	const pipePath = getPipePath(process.pid);
-	await mkdir(tmpdir, { recursive: true });
+	// Sync: the child cannot be spawned until the socket is listening, so each
+	// async fs round trip here is pure added latency on the CLI critical path.
+	mkdirSync(tmpdir, { recursive: true });
 
 	/**
 	 * Fix #457 (https://github.com/privatenumber/tsx/issues/457)
@@ -41,7 +42,7 @@ export const createIpcServer = async () => {
 	 * We can safely delete the pipe file, the previous process must has been closed,
 	 * as pid is unique at the same.
 	 */
-	await rm(pipePath, { force: true });
+	rmSync(pipePath, { force: true });
 
 	await new Promise<void>((resolve, reject) => {
 		server.listen(pipePath, resolve);

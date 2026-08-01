@@ -180,8 +180,6 @@ if (rawArgv[0] === 'watch') {
 	// Default --test glob to find TypeScript files
 	if (values.test && firstPositionalIndex === -1) { argvFlagsToRun.push('**/{test,test/**/*,test-*,*[.-_]test}.?(c|m)@(t|j)s') }
 
-	const { run } = await import('./run');
-
 	/**
 	 * Forking exists to apply Node flags and `--import` preloads at bootstrap, and to relay signals/IPC.
 	 * When none of that is needed the entry can run in this process and skip an entire Node bootstrap.
@@ -220,7 +218,10 @@ if (rawArgv[0] === 'watch') {
 		await (await import('./run-eval-in-process')).runEvalInProcess(argvFlagsToRun.shift()!, argvFlagsToRun);
 	} else {
 		const shouldRelaySignals = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
-		const ipc = shouldRelaySignals ? await import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
+		// The child can't be spawned until the socket is listening, so overlap `./run` (node:child_process) with that setup.
+		const ipcPromise = shouldRelaySignals ? import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
+		const { run } = await import('./run');
+		const ipc = await ipcPromise;
 
 		const childProcess = run(argvFlagsToRun, { noCache: Boolean(values['no-cache']), signalRelay: shouldRelaySignals, tsconfigPath: values.tsconfig });
 

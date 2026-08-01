@@ -17,12 +17,18 @@ export type Transformed = {
 	map?: SourceMap;
 };
 
-const loadModule = createRequire(import.meta.url);
-const esbuildVersionSalt = `-${(loadModule('esbuild/package.json') as { version: string }).version}`;
+let loadModule: NodeJS.Require | undefined;
+
+const getLoadModule = () => loadModule ?? (loadModule = createRequire(import.meta.url));
+
+// Resolving esbuild's package.json costs ~1ms and is only needed once an esbuild transform actually happens, which the native-strip path never reaches.
+let esbuildVersionSalt: string | undefined;
+
+const getEsbuildVersionSalt = () => esbuildVersionSalt ?? (esbuildVersionSalt = `-${(getLoadModule()('esbuild/package.json') as { version: string }).version}`);
 
 let esbuildModule: EsbuildModule | undefined;
 
-const getEsbuildModuleSync = () => esbuildModule ?? (esbuildModule = loadModule('esbuild'));
+const getEsbuildModuleSync = () => esbuildModule ?? (esbuildModule = getLoadModule()('esbuild'));
 
 const formatEsbuildError = (error: TransformFailure) => {
 	error.name = 'TransformError';
@@ -149,7 +155,7 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 
 	const hashOptionsString = hasCustomHashOptions(extendOptions) ? stringifyStable({ ...esbuildOptions, sourcefile: undefined, tsconfigRaw: undefined }) : baseHashOptions;
 
-	const hash = getHash(code, filePath, esbuildOptions, esbuildVersionSalt, hashOptionsString, tsconfigHash);
+	const hash = getHash(code, filePath, esbuildOptions, getEsbuildVersionSalt(), hashOptionsString, tsconfigHash);
 	let transformed = cache.get(hash);
 
 	if (!transformed) {

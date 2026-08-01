@@ -1,4 +1,3 @@
-import net from 'node:net';
 import { getPipePath } from './get-pipe-path';
 
 export type SendToParent = (data: Record<string, unknown>) => void;
@@ -23,27 +22,32 @@ const dependencyReportingEnabled = process.env['TSNODE_DEPENDENCY_REPORTING'] ==
 
 let queuedMessages: Record<string, unknown>[] = [];
 
-const connectToServer = () => new Promise<SendToParent | void>((resolve) => {
-	const socket = net.createConnection(getPipePath(process.ppid), () => {
-		const sendToParent: SendToParent = (data) => {
-			const messageBuffer = Buffer.from(JSON.stringify(data));
-			const lengthBuffer = Buffer.alloc(4);
-			lengthBuffer.writeInt32BE(messageBuffer.length, 0);
-			socket.write(Buffer.concat([ lengthBuffer, messageBuffer ]));
-		};
-		resolve(sendToParent);
+// `node:net` costs ~1ms to initialize and is only reachable when the parent enabled IPC, so it stays off the loader startup path.
+const connectToServer = async (): Promise<SendToParent | void> => {
+	const { default: net } = await import('node:net');
+
+	return new Promise<SendToParent | void>((resolve) => {
+		const socket = net.createConnection(getPipePath(process.ppid), () => {
+			const sendToParent: SendToParent = (data) => {
+				const messageBuffer = Buffer.from(JSON.stringify(data));
+				const lengthBuffer = Buffer.alloc(4);
+				lengthBuffer.writeInt32BE(messageBuffer.length, 0);
+				socket.write(Buffer.concat([ lengthBuffer, messageBuffer ]));
+			};
+			resolve(sendToParent);
+		});
+
+		/**
+		 * Ignore error when:
+		 * - Called as a loader and there is no server
+		 * - Nested process when using --test and the ppid is incorrect
+		 */
+		socket.on('error', () => resolve());
+
+		// Prevent Node from waiting for this socket to close before exiting
+		socket.unref();
 	});
-
-	/**
-	 * Ignore error when:
-	 * - Called as a loader and there is no server
-	 * - Nested process when using --test and the ppid is incorrect
-	 */
-	socket.on('error', () => resolve());
-
-	// Prevent Node from waiting for this socket to close before exiting
-	socket.unref();
-});
+};
 
 export const parent: Parent = {
 	send: dependencyReportingEnabled ? (data) => queuedMessages.push(data) : undefined
