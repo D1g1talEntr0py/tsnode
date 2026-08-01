@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import { join } from 'node:path';
 import { cwd } from 'node:process';
 import { existsSync } from 'node:fs';
-import { rm, readFile } from 'node:fs/promises';
+import { rm, chmod, readFile, writeFile } from 'node:fs/promises';
 
 const projectRoot = cwd();
 const packageJsonPath = join(projectRoot, 'package.json');
@@ -72,3 +72,12 @@ await build({
 	minify: true,
 	logLevel: 'info',
 });
+
+const cliOutputPath = join(projectRoot, 'dist', 'cli.js');
+const cliOutput = await readFile(cliOutputPath, 'utf8');
+
+if (!cliOutput.startsWith('#!/usr/bin/env node\n')) {
+	await writeFile(cliOutputPath, `#!/usr/bin/env node\n${cliOutput}`, 'utf8');
+}
+
+await chmod(cliOutputPath, 0o755);
