@@ -1,3 +1,7 @@
+## [1.1.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.1.0...v1.1.1) (2026-08-01)
+* optimize IPC connection handling and improve performance by using synchronous file operations (82d37271758c527bc7a0f2c258622d37eadb0b02)
+* enhance comparison benchmark implementation to include esmLoaderPath for tsx (6c52a035fbe41391d517c9ebe3210dd1e894429e)
+
 ## [1.1.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.0.1...v1.1.0) (2026-08-01)
 * implement loader declaration builder and enhance CLI signal handling (cd1470cd83004b34ca6cf8598efa6dd68ebf1944)
 * add Copilot instructions and update dependencies in package.json and pnpm-lock.yaml (f5a317a0bb7af0a43c3f7b56945b62040d5231fd)
