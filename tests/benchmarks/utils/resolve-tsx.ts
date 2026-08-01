@@ -5,6 +5,7 @@ import { execa } from 'execa';
 export type ComparisonImplementation = {
 	name: string;
 	cliPath: string;
+	esmLoaderPath?: string;
 };
 
 type PackageTarget = {
@@ -69,7 +70,7 @@ const readPackageBinPath = async (
 	throw new Error(`Could not resolve ${binName} from ${packageJsonPath}`);
 };
 
-const resolveInstalledPackage = async (
+const installAndResolveComparisonPackage = async (
 	packageName: string,
 	binName: string,
 	installDirectory: string,
@@ -82,111 +83,22 @@ const resolveInstalledPackage = async (
 		throw new Error(`Installed ${label} without ${binName}`);
 	}
 
+	const esmLoaderPath = packageName === 'tsx'
+		? await (async () => {
+			for (const candidate of [path.join(packageRoot, 'dist/esm/index.js'), path.join(packageRoot, 'dist/esm/index.mjs')]) {
+				if (await statSafe(candidate)) {
+					return candidate;
+				}
+			}
+			return undefined;
+		})()
+		: undefined;
+
 	return {
 		name: label,
 		cliPath: binPath,
+		esmLoaderPath,
 	};
-};
-
-const resolveGlobalCliPath = async (binaryPath: string): Promise<string> => {
-	const normalizeCandidate = (candidate: string) => {
-		const cleaned = candidate.trim().replace(/^['\"]|['\"]$/g, '');
-		return path.isAbsolute(cleaned) ? cleaned : path.resolve(path.dirname(binaryPath), cleaned);
-	};
-
-	const resolveModuleTarget = async (candidate: string | undefined) => {
-		if (!candidate) {
-			return undefined;
-		}
-
-		const resolved = normalizeCandidate(candidate);
-		if (!/\.js$/i.test(resolved)) {
-			return undefined;
-		}
-
-		const stats = await statSafe(resolved);
-		if (!stats?.isFile()) {
-			return undefined;
-		}
-
-		return resolved;
-	};
-
-	const binContent = await fs.readFile(binaryPath, 'utf8').catch(() => undefined);
-	if (binContent) {
-		const match = binContent.match(/# cmd-shim-target=(.+)/);
-		const shimTarget = await resolveModuleTarget(match?.[1]);
-		if (shimTarget) {
-			return shimTarget;
-		}
-
-		const quotedModulePathMatch = binContent.match(/["']([^"']+\.js)["']/i);
-		const quotedModuleTarget = await resolveModuleTarget(quotedModulePathMatch?.[1]);
-		if (quotedModuleTarget) {
-			return quotedModuleTarget;
-		}
-	}
-
-	const realPathTarget = await resolveModuleTarget(await fs.realpath(binaryPath).catch(() => undefined));
-	if (realPathTarget) {
-		return realPathTarget;
-	}
-
-	throw new Error(`Could not resolve a JavaScript module target from global binary: ${binaryPath}`);
-};
-
-const findExecutableOnPath = async (binaryName: string): Promise<string | undefined> => {
-	const pathValue = process.env['PATH'];
-	if (!pathValue) { return undefined }
-
-	const pathDirectories = pathValue.split(path.delimiter).filter(Boolean);
-	const candidateExtensions = process.platform === 'win32' ? (process.env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').map(ext => ext.trim()).filter(Boolean) : [''];
-
-	for (const directory of pathDirectories) {
-		const basePath = path.join(directory, binaryName);
-
-		for (const extension of candidateExtensions) {
-			const candidatePath = process.platform === 'win32' && extension	? `${basePath}${extension.toLowerCase()}` : basePath;
-
-			if ((await statSafe(candidatePath))?.isFile()) { return candidatePath }
-
-			if (process.platform === 'win32' && extension) {
-				const upperCaseCandidate = `${basePath}${extension.toUpperCase()}`;
-				if ((await statSafe(upperCaseCandidate))?.isFile()) { return upperCaseCandidate }
-			}
-		}
-	}
-
-	return undefined;
-};
-
-export const resolveGlobalTsxPaths = async (): Promise<{ cli: string; esmLoader: string } | null> => {
-	try {
-		const tsxBin = await findExecutableOnPath('tsx');
-		if (!tsxBin) { return null }
-
-		const cliPath = await resolveGlobalCliPath(tsxBin);
-		const pkgRoot = path.resolve(path.dirname(cliPath), '..');
-		const esmLoaderCandidates = [ path.join(pkgRoot, 'dist/esm/index.js') ];
-
-		const esmLoader = await (async () => {
-			for (const candidate of esmLoaderCandidates) {
-				try {
-					await fs.access(candidate);
-					return candidate;
-				} catch {}
-			}
-			return undefined;
-		})();
-
-		if (!esmLoader) {
-			return null;
-		}
-
-		return { cli: cliPath, esmLoader };
-	} catch {
-		return null;
-	}
 };
 
 const resolveComparisonTarget = (
@@ -240,16 +152,6 @@ export const resolveComparison = async (
 		throw new Error(`Could not find dist/cli.js in ${specifier}`);
 	}
 
-	if (specifier === 'tsx') {
-		const tsx = await resolveGlobalTsxPaths();
-		if (tsx) {
-			return {
-				name: 'tsx',
-				cliPath: tsx.cli,
-			};
-		}
-	}
-
 	const target = resolveComparisonTarget(specifier);
 	const installDirectory = path.join(installRootPath, specifier.replaceAll(/[^\w.-]/g, '-'));
 	await fs.mkdir(installDirectory, { recursive: true });
@@ -266,9 +168,10 @@ export const resolveComparison = async (
 		'add',
 		...(target.installSpecs ?? [target.installSpecifier]),
 		...(target.allowBuild ? [`--allow-build=${target.allowBuild.join(',')}`] : []),
+		...(target.packageName === 'tsx' ? ['--allow-build=esbuild'] : []),
 	], {
 		cwd: installDirectory,
 	});
 
-	return resolveInstalledPackage(target.packageName, target.binName, installDirectory, target.displayName);
+	return installAndResolveComparisonPackage(target.packageName, target.binName, installDirectory, target.displayName);
 };

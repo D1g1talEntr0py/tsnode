@@ -48,7 +48,7 @@ import { execa } from 'execa';
 import { createFixture } from 'fs-fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
-import { resolveComparison, resolveGlobalTsxPaths } from './utils/resolve-tsx';
+import { resolveComparison } from './utils/resolve-tsx';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -59,7 +59,7 @@ const nodePath = process.execPath;
 const localCliPath = path.resolve(__dirname, '../../dist/cli.js');
 const localLoaderPath = path.resolve(__dirname, '../../dist/loader.js');
 const tsnodeBenchmarkEnv = (process.env['TSNODE_COMPARE_FAST_PATH'] === '1' ? { TSNODE_BENCH_FAST_PATH: '1' } : undefined);
-const comparisonTargets = ['ts-node', 'jiti', 'esrun'] as const;
+const comparisonTargets = ['tsx', 'ts-node', 'jiti', 'esrun'] as const;
 
 // ---------------------------------------------------------------------------
 // Cache helpers
@@ -147,16 +147,27 @@ const spawnTsnodeImport = (cwd: string, env?: Record<string, string>) => spawn(
 type ComparisonImplementation = {
 	name: string;
 	cliPath: string;
+	esmLoaderPath?: string;
 };
 
 let comparisonImplementations: ComparisonImplementation[] = [];
 
-const benchComparisonImplementations = (fixturePath: string, excludedNames: string[] = []) => {
+/**
+ * `tsx` is always benched explicitly (CLI + loader mode), so it is excluded
+ * here to avoid a duplicate row that also doubles the group's runtime.
+ *
+ * `cold` must be set for the cold-cache group: without it these runners keep
+ * their populated caches and are measured warm against a cold tsnode, which
+ * previously made the summary compare unlike workloads.
+ */
+const benchComparisonImplementations = (fixturePath: string, excludedNames: string[] = [], cold = false) => {
 	for (const implementation of comparisonImplementations) {
-		if (excludedNames.includes(implementation.name)) {
+		if (implementation.name === 'tsx' || excludedNames.includes(implementation.name)) {
 			continue;
 		}
-		bench(implementation.name, async () => {
+		bench(cold ? `${implementation.name} (cold)` : implementation.name, async () => {
+			if (cold) { clearTransformCache() }
+
 			await spawn([implementation.cliPath, 'main.ts'], fixturePath);
 		});
 	}
@@ -246,11 +257,6 @@ console.log(JSON.stringify({ totalArea: totalArea.toFixed(2), color, dir, stats 
 
 process.stdout.write('Setting up benchmark environment…\n');
 
-const tsx = await resolveGlobalTsxPaths();
-if (!tsx) {
-	process.stderr.write('Warning: tsx not found in PATH — tsx benchmarks will be skipped\n');
-}
-
 await using installRoot = await createFixture();
 comparisonImplementations = await Promise.all(
 	comparisonTargets.map(async target => {
@@ -258,9 +264,12 @@ comparisonImplementations = await Promise.all(
 		return {
 			name: implementation.name,
 			cliPath: implementation.cliPath,
+			esmLoaderPath: implementation.esmLoaderPath,
 		};
 	}),
 );
+
+const tsxImplementation = comparisonImplementations.find(implementation => implementation.name === 'tsx');
 
 // Build all fixtures once; they are reused across all benchmark iterations.
 // Mitata handles the iteration loop — we only need fixtures on disk.
@@ -332,18 +341,18 @@ const warmupRuns: Promise<void>[] = [
 	spawnTsnodeImport(largeFixture.path),
 	spawnTsnodeImport(complexFixture.path),
 ];
-if (tsx) {
+if (tsxImplementation?.esmLoaderPath) {
 	warmupRuns.push(
-		spawn([tsx.cli, 'main.ts'], simpleFixture.path),
-		spawn([tsx.cli, 'main.ts'], smallFixture.path),
-		spawn([tsx.cli, 'main.ts'], mediumFixture.path),
-		spawn([tsx.cli, 'main.ts'], largeFixture.path),
-		spawn([tsx.cli, 'main.ts'], complexFixture.path),
-		spawn(['--import', tsx.esmLoader, 'main.ts'], simpleFixture.path),
-		spawn(['--import', tsx.esmLoader, 'main.ts'], smallFixture.path),
-		spawn(['--import', tsx.esmLoader, 'main.ts'], mediumFixture.path),
-		spawn(['--import', tsx.esmLoader, 'main.ts'], largeFixture.path),
-		spawn(['--import', tsx.esmLoader, 'main.ts'], complexFixture.path),
+		spawn([tsxImplementation.cliPath, 'main.ts'], simpleFixture.path),
+		spawn([tsxImplementation.cliPath, 'main.ts'], smallFixture.path),
+		spawn([tsxImplementation.cliPath, 'main.ts'], mediumFixture.path),
+		spawn([tsxImplementation.cliPath, 'main.ts'], largeFixture.path),
+		spawn([tsxImplementation.cliPath, 'main.ts'], complexFixture.path),
+		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], simpleFixture.path),
+		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], smallFixture.path),
+		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], mediumFixture.path),
+		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], largeFixture.path),
+		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], complexFixture.path),
 	);
 }
 for (const implementation of comparisonImplementations) {
@@ -390,13 +399,13 @@ group('Startup floor (single file)', () => {
 			await spawnTsnodeCli(simpleFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], simpleFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], simpleFixture.path);
 			});
 
 			bench('tsx', async () => {
-				await spawn([tsx.cli, 'main.ts'], simpleFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], simpleFixture.path);
 			});
 		}
 
@@ -419,13 +428,13 @@ group('Small project — 10 ESM modules', () => {
 			await spawnTsnodeCli(smallFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], smallFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], smallFixture.path);
 			});
 
 			bench('tsx', async () => {
-				await spawn([tsx.cli, 'main.ts'], smallFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], smallFixture.path);
 			});
 		}
 
@@ -448,13 +457,13 @@ group('Medium project — 100 ESM modules', () => {
 			await spawnTsnodeCli(mediumFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], mediumFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], mediumFixture.path);
 			});
 
 			bench('tsx', async () => {
-				await spawn([tsx.cli, 'main.ts'], mediumFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], mediumFixture.path);
 			});
 		}
 
@@ -477,13 +486,13 @@ group('Large project — 300 ESM modules', () => {
 			await spawnTsnodeCli(largeFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], largeFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], largeFixture.path);
 			});
 
 			bench('tsx', async () => {
-				await spawn([tsx.cli, 'main.ts'], largeFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], largeFixture.path);
 			});
 		}
 
@@ -504,13 +513,13 @@ group('Complex TypeScript (enums + namespaces — transpilation required)', () =
 			await spawnTsnodeCli(complexFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], complexFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], complexFixture.path);
 			});
 
 			bench('tsx', async () => {
-				await spawn([tsx.cli, 'main.ts'], complexFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], complexFixture.path);
 			});
 		}
 
@@ -535,19 +544,19 @@ group('Cold cache — medium project (100 modules, cache cleared each run)', () 
 			await spawnTsnodeCli(coldMediumFixture.path);
 		});
 
-		if (tsx) {
+		if (tsxImplementation?.esmLoaderPath) {
 			bench('--import tsx (cold)', async () => {
 				await clearTransformCache();
-				await spawn(['--import', tsx.esmLoader, 'main.ts'], coldMediumFixture.path);
+				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], coldMediumFixture.path);
 			});
 
 			bench('tsx (cold)', async () => {
 				await clearTransformCache();
-				await spawn([tsx.cli, 'main.ts'], coldMediumFixture.path);
+				await spawn([tsxImplementation.cliPath, 'main.ts'], coldMediumFixture.path);
 			});
 		}
 
-		benchComparisonImplementations(coldMediumFixture.path);
+		benchComparisonImplementations(coldMediumFixture.path, [], true);
 
 		// --strip-types has no transform cache; every run is effectively cold
 		bench('node --strip-types (no cache)', async () => {
