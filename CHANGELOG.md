@@ -1,3 +1,6 @@
+## [1.1.2](https://github.com/D1g1talEntr0py/tsnode/compare/v1.1.1...v1.1.2) (2026-08-01)
+* add shebang to CLI output and set executable permissions (502d85bbb75a335d1530f2120a19eec30f8bc29f)
+
 ## [1.1.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.1.0...v1.1.1) (2026-08-01)
 * optimize IPC connection handling and improve performance by using synchronous file operations (82d37271758c527bc7a0f2c258622d37eadb0b02)
 * enhance comparison benchmark implementation to include esmLoaderPath for tsx (6c52a035fbe41391d517c9ebe3210dd1e894429e)
