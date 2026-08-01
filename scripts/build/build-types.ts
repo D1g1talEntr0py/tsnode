@@ -68,6 +68,55 @@ const buildApiIndexDeclaration = async () => {
 	return `${declarationSections.join('\n\n')}\n`;
 };
 
+const buildLoaderDeclaration = async () => {
+	const [loaderDeclaration, sharedTypesDeclaration] = await Promise.all([ readTemporaryDeclaration('loader.d.ts'), readTemporaryDeclaration('types.d.ts') ]);
+
+	const reExportMatch = loaderDeclaration.match(/export type \{([\s\S]*?)\} from ['"]\.\/types['"];?/m);
+	if (!reExportMatch) { throw new Error('Unable to find loader type re-export declaration') }
+
+	const exportedTypeNames = reExportMatch[1]
+		.split(',')
+		.map(name => name.trim())
+		.filter(Boolean);
+
+	const allTypeNames = Array.from(sharedTypesDeclaration.matchAll(/^export type ([A-Za-z0-9_]+)(?:<[^\n]+>)? = /gm))
+		.map(([, typeName]) => typeName);
+
+	const declarationByTypeName = new Map(allTypeNames.map(typeName => [typeName, extractTypeDeclaration(sharedTypesDeclaration, typeName)]));
+
+	const exportedTypeNameSet = new Set(exportedTypeNames);
+	const includedTypeNameSet = new Set<string>();
+	const orderedTypeNames: string[] = [];
+
+	const includeWithDependencies = (typeName: string) => {
+		if (includedTypeNameSet.has(typeName)) { return }
+
+		const declaration = declarationByTypeName.get(typeName);
+		if (!declaration) { throw new Error(`Unable to find type declaration for ${typeName}`) }
+
+		for (const dependencyName of allTypeNames) {
+			if (dependencyName === typeName) { continue }
+
+			const dependencyPattern = new RegExp(`\\b${dependencyName}\\b`);
+			if (dependencyPattern.test(declaration)) { includeWithDependencies(dependencyName) }
+		}
+
+		includedTypeNameSet.add(typeName);
+		orderedTypeNames.push(typeName);
+	};
+
+	for (const exportedTypeName of exportedTypeNames) {
+		includeWithDependencies(exportedTypeName);
+	}
+
+	const declarationSections = orderedTypeNames.map((name) => {
+		const declaration = declarationByTypeName.get(name)!;
+		return exportedTypeNameSet.has(name) ? declaration : declaration.replace(/^export /, '');
+	});
+
+	return `${declarationSections.join('\n\n')}\n`;
+};
+
 const writePublicDeclaration = async (sourcePath: string, outputPath: string) => {
 	const relativePath = path.relative(path.join(projectRoot, 'src'), sourcePath).replace(/\.ts$/, '.d.ts');
 	const temporaryOutputPath = path.join(temporaryDeclarationDirectory, relativePath);
@@ -75,8 +124,11 @@ const writePublicDeclaration = async (sourcePath: string, outputPath: string) =>
 	await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
 
 	if (relativePath === path.join('api', 'index.d.ts')) {
-		await fsPromises.writeFile(outputPath, await buildApiIndexDeclaration());
-		return;
+		return fsPromises.writeFile(outputPath, await buildApiIndexDeclaration());
+	}
+
+	if (relativePath === 'loader.d.ts') {
+		return fsPromises.writeFile(outputPath, await buildLoaderDeclaration());
 	}
 
 	const declaration = await fsPromises.readFile(temporaryOutputPath, 'utf8');

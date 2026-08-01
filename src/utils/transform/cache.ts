@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { unlink, mkdir, readdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
 import { Json, type JsonString } from '../json';
 import { tmpdir, legacyTmpdirs } from '../temporary-directory';
@@ -78,6 +78,7 @@ class FileCache<T> implements Cache<T> {
 	#exitHookRegistered = false;
 	#cacheDirectoryReady: Promise<void> | undefined;
 	#cacheDirectoryReadyPath: string | undefined;
+	#cacheDirectoryExists: boolean | undefined;
 	#maintenanceScheduled = false;
 
 	get(key: string) {
@@ -160,8 +161,11 @@ class FileCache<T> implements Cache<T> {
 	#ensureCacheDirectory() {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
 			this.#cacheDirectoryReadyPath = this.#cacheDirectory;
+			this.#cacheDirectoryExists = undefined;
 			this.#cacheDirectoryReady = mkdir(this.#cacheDirectory, { recursive: true }).then(noop);
 		}
+
+		this.#cacheDirectoryExists = true;
 
 		return this.#cacheDirectoryReady!;
 	}
@@ -170,7 +174,17 @@ class FileCache<T> implements Cache<T> {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
 			mkdirSync(this.#cacheDirectory, { recursive: true });
 			this.#cacheDirectoryReadyPath = this.#cacheDirectory;
+			this.#cacheDirectoryExists = true;
+			return;
 		}
+
+		this.#cacheDirectoryExists = true;
+	}
+
+	#canReadDisk() {
+		if (this.#cacheDirectoryExists) { return true }
+
+		return existsSync(this.#cacheDirectory) ? (this.#cacheDirectoryExists = true) : false;
 	}
 
 	#setMemory(key: string, value: T) {
@@ -216,6 +230,8 @@ class FileCache<T> implements Cache<T> {
 	 * CPU profile), so only entries that exist but cannot be read are removed.
 	 */
 	#readDiskEntry(key: string) {
+		if (!this.#canReadDisk()) { return undefined }
+
 		const filePath = this.#cacheFilePath(key);
 
 		try {
@@ -230,6 +246,8 @@ class FileCache<T> implements Cache<T> {
 	}
 
 	async #readDiskEntryAsync(key: string) {
+		if (!this.#canReadDisk()) { return undefined }
+
 		const filePath = this.#cacheFilePath(key);
 
 		try {

@@ -48,7 +48,7 @@ import { execa } from 'execa';
 import { createFixture } from 'fs-fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
-import { resolveComparison } from './utils/resolve-tsx';
+import { resolveComparison, resolveGlobalTsxPaths } from './utils/resolve-tsx';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -60,39 +60,6 @@ const localCliPath = path.resolve(__dirname, '../../dist/cli.js');
 const localLoaderPath = path.resolve(__dirname, '../../dist/loader.js');
 const tsnodeBenchmarkEnv = (process.env['TSNODE_COMPARE_FAST_PATH'] === '1' ? { TSNODE_BENCH_FAST_PATH: '1' } : undefined);
 const comparisonTargets = ['ts-node', 'jiti', 'esrun'] as const;
-
-/**
- * Locate the tsx CLI and its ESM loader by parsing the pnpm-generated bin
- * wrapper, which embeds a `# cmd-shim-target=` comment pointing at the real
- * cli.js inside the content-addressed store.
- */
-async function resolveTsxPaths(): Promise<{ cli: string; esmLoader: string } | null> {
-	try {
-		const { stdout: tsxBin } = await execa('which', ['tsx']);
-		const binContent = await fs.readFile(tsxBin.trim(), 'utf8');
-		const match = binContent.match(/# cmd-shim-target=(.+)/);
-		if (!match) { return null }
-		const cliPath = match[1].trim();
-		// cliPath = .../tsx/dist/cli.{js,mjs}  →  pkgRoot = .../tsx
-		const pkgRoot = path.resolve(path.dirname(cliPath), '..');
-		const esmLoaderCandidates = [ path.join(pkgRoot, 'dist/esm/index.js'), path.join(pkgRoot, 'dist/esm/index.mjs') ];
-
-		const esmLoader = await (async () => {
-			for (const candidate of esmLoaderCandidates) {
-				try {
-					await fs.access(candidate);
-					return candidate;
-				} catch {}
-			}
-			return undefined;
-		})();
-
-		if (!esmLoader) return null;
-		return { cli: cliPath, esmLoader };
-	} catch {
-		return null;
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Cache helpers
@@ -279,7 +246,7 @@ console.log(JSON.stringify({ totalArea: totalArea.toFixed(2), color, dir, stats 
 
 process.stdout.write('Setting up benchmark environment…\n');
 
-const tsx = await resolveTsxPaths();
+const tsx = await resolveGlobalTsxPaths();
 if (!tsx) {
 	process.stderr.write('Warning: tsx not found in PATH — tsx benchmarks will be skipped\n');
 }
@@ -580,6 +547,8 @@ group('Cold cache — medium project (100 modules, cache cleared each run)', () 
 			});
 		}
 
+		benchComparisonImplementations(coldMediumFixture.path);
+
 		// --strip-types has no transform cache; every run is effectively cold
 		bench('node --strip-types (no cache)', async () => {
 			await spawn(['--strip-types', 'main.ts'], coldMediumFixture.path);
@@ -618,24 +587,11 @@ group('CLI signal relay overhead (single file, fork path)', () => {
 // ---------------------------------------------------------------------------
 
 try {
-	await run({
-		format: 'mitata',
-		filter: /.*/,
-		throw: false,
-		// Parent-process measurement; meaningless for spawned children
-		gc: false,
-	});
+	// Parent-process measurement; meaningless for spawned children
+	await run({ format: 'mitata', filter: /.*/, throw: false, gc: false });
 } finally {
 	// Clean up all fixture directories regardless of benchmark outcome
-	await Promise.allSettled([
-		simpleFixture.rm(),
-		smallFixture.rm(),
-		mediumFixture.rm(),
-		coldMediumFixture.rm(),
-		largeFixture.rm(),
-		complexFixture.rm(),
-		baselineFixture.rm(),
-	]);
+	await Promise.allSettled([ simpleFixture.rm(), smallFixture.rm(), mediumFixture.rm(), coldMediumFixture.rm(), largeFixture.rm(), complexFixture.rm(), baselineFixture.rm() ]);
 
 	rmSync(benchmarkTmpdir, { recursive: true, force: true });
 }

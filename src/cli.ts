@@ -22,6 +22,7 @@ const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 	 * Ideally the timeout should be as low as possible
 	 * since the child lets the parent know that it received
 	 * the signal
+	 * @returns Promise<NodeJS.Signals | undefined> undefined if the child doesn't respond in time
 	 */
 	const waitForSignalFromChild = () => {
 		const signalWaitPromise = new Promise<NodeJS.Signals | undefined>((resolve) => {
@@ -86,13 +87,13 @@ const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 const tsnodeFlags = {
 	noCache: { type: Boolean },
 	tsconfig: { type: String }
-} as const satisfies Flags;
+} satisfies Flags;
 
 const topLevelFlags = {
 	...tsnodeFlags,
 	version: { type: Boolean, alias: 'v' },
 	help: { type: Boolean, alias: 'h' }
-} as const satisfies Flags;
+} satisfies Flags;
 
 const executionFlags = {
 	...topLevelFlags,
@@ -100,7 +101,7 @@ const executionFlags = {
 	test: { type: Boolean },
 	eval: { type: String, alias: 'e' },
 	print: { type: String, alias: 'p' },
-} as const satisfies Flags;
+} satisfies Flags;
 
 const parseArgOptions = {
 	'no-cache': { type: 'boolean' },
@@ -111,7 +112,7 @@ const parseArgOptions = {
 	test: { type: 'boolean' },
 	eval: { type: 'string', short: 'e' },
 	print: { type: 'string', short: 'p' },
-} as const satisfies ParseArgsOptionsConfig;
+} satisfies ParseArgsOptionsConfig;
 
 type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {
 	[Name in keyof Options]?: Options[Name] extends { type: 'string' } ? string : Options[Name] extends { type: 'boolean' } ? boolean : never;
@@ -128,7 +129,7 @@ const parseCliValues = async (args: string[]) => {
 type EvalType = Extract<keyof ParsedCliValues, 'eval' | 'print'>;
 
 const getEvalInput = (values: ParsedCliValues) => {
-	for (const type of [ 'print', 'eval' ] as const satisfies EvalType[]) {
+	for (const type of [ 'print', 'eval' ] satisfies EvalType[]) {
 		const code = values[type];
 		if (code !== undefined) { return { type, code } }
 	}
@@ -144,11 +145,10 @@ const printHelp = () => {
 const rawArgv = process.argv.slice(2);
 
 if (rawArgv[0] === 'watch') {
-	const { runWatchCommand } = await import('./watch/index.js');
-	await runWatchCommand(rawArgv.slice(1));
+	await (await import('./watch/index.js')).runWatchCommand(rawArgv.slice(1));
 	process.exitCode ??= 0;
 } else {
-	const { findFirstPositionalIndex } = await import('./remove-argv-flags');
+	const { findFirstPositionalIndex, removeArgvFlags } = await import('./remove-argv-flags');
 	const firstPositionalIndex = findFirstPositionalIndex(executionFlags, rawArgv);
 
 	// `tsnode <script>` with no leading flags has nothing to parse. Skipping the
@@ -165,7 +165,7 @@ if (rawArgv[0] === 'watch') {
 		console.log(`${'-'.repeat(45)}\n`);
 	}
 
-	const argvFlagsToRun = (await import('./remove-argv-flags')).removeArgvFlags({ ...tsnodeFlags, eval: { type: String, alias: 'e' }, print: { type: String, alias: 'p' } });
+	const argvFlagsToRun = removeArgvFlags({ ...tsnodeFlags, eval: { type: String, alias: 'e' }, print: { type: String, alias: 'p' } });
 
 	const evalInput = getEvalInput(values);
 
@@ -215,11 +215,9 @@ if (rawArgv[0] === 'watch') {
 		if (values['no-cache']) { process.env['TSNODE_DISABLE_CACHE'] = '1' }
 		if (typeof values.tsconfig === 'string') { process.env['TSNODE_TSCONFIG_PATH'] = values.tsconfig }
 
-		const { runInProcess } = await import('./run-in-process');
-		await runInProcess(argvFlagsToRun, resolvedEntrypointPath);
+		await (await import('./run-in-process')).runInProcess(argvFlagsToRun, resolvedEntrypointPath);
 	} else if (canRunEvalInProcess) {
-		const { runEvalInProcess } = await import('./run-eval-in-process');
-		await runEvalInProcess(argvFlagsToRun.shift()!, argvFlagsToRun);
+		await (await import('./run-eval-in-process')).runEvalInProcess(argvFlagsToRun.shift()!, argvFlagsToRun);
 	} else {
 		const shouldRelaySignals = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
 		const ipc = shouldRelaySignals ? await import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
