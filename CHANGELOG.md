@@ -1,3 +1,7 @@
+## [1.1.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.0.1...v1.1.0) (2026-08-01)
+* implement loader declaration builder and enhance CLI signal handling (cd1470cd83004b34ca6cf8598efa6dd68ebf1944)
+* add Copilot instructions and update dependencies in package.json and pnpm-lock.yaml (f5a317a0bb7af0a43c3f7b56945b62040d5231fd)
+
 ## [1.0.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.0.0...v1.0.1) (2026-07-28)
 * **deps:** fixes CWE-22 - Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal') (c27f5a34c9d8f96e05c596eb7c0a55d274697443)
 The product uses external input to construct a pathname that is intended to identify a file or directory that is located underneath a restricted parent directory, but the product does not properly neutralize special elements within the pathname that can cause the pathname to resolve to a location that is outside of the restricted directory.
