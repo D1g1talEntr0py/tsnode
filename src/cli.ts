@@ -100,7 +100,7 @@ const executionFlags = {
 	inputType: { type: String },
 	test: { type: Boolean },
 	eval: { type: String, alias: 'e' },
-	print: { type: String, alias: 'p' },
+	print: { type: String, alias: 'p' }
 } satisfies Flags;
 
 const parseArgOptions = {
@@ -111,7 +111,7 @@ const parseArgOptions = {
 	'input-type': { type: 'string' },
 	test: { type: 'boolean' },
 	eval: { type: 'string', short: 'e' },
-	print: { type: 'string', short: 'p' },
+	print: { type: 'string', short: 'p' }
 } satisfies ParseArgsOptionsConfig;
 
 type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {

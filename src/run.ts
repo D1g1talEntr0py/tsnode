@@ -40,7 +40,7 @@ export const run = (argv: string[], options?: { noCache?: boolean, signalRelay?:
 		...(needsIpcSocket ? [ '--import', new URL('./preflight.js', import.meta.url).toString() ] : []),
 		...(shouldPatchRepl(argv) ? [ '--import', new URL('./repl.js', import.meta.url).toString() ] : []),
 		'--import', new URL('./loader.js', import.meta.url).toString(),
-		...argv,
+		...argv
 	];
 
 	return spawn(process.execPath, args, { stdio, env: spawnEnv });

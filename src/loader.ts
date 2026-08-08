@@ -16,5 +16,5 @@ export type {
 	ScopedImport,
 	TsconfigOptions,
 	TsnodeRequest,
-	Unregister,
+	Unregister
 } from './types';

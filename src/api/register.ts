@@ -25,7 +25,7 @@ const mergeResolveContext = (context: ResolveHookContext, update?: Partial<Resol
 	...context,
 	...update,
 	conditions: update?.conditions ?? context.conditions,
-	importAttributes: update?.importAttributes ?? context.importAttributes,
+	importAttributes: update?.importAttributes ?? context.importAttributes
 });
 
 const mergeLoadContext = (context: LoadHookContext, update?: Partial<LoadHookContext>): LoadHookContext => ({
@@ -33,7 +33,7 @@ const mergeLoadContext = (context: LoadHookContext, update?: Partial<LoadHookCon
 	...update,
 	conditions: update?.conditions ?? context.conditions,
 	format: update?.format ?? context.format,
-	importAttributes: update?.importAttributes ?? context.importAttributes,
+	importAttributes: update?.importAttributes ?? context.importAttributes
 });
 
 const sharedResolve: ResolveHookSync = (specifier, context, nextResolve) => {
@@ -86,7 +86,7 @@ export const registerScoped = (options: RequiredProperty<RegisterOptions, 'names
 				sharedNativeHooks = undefined;
 				sharedHooksRegistered = false;
 			}
-		},
+		}
 	};
 };
 

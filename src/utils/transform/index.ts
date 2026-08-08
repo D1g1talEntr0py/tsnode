@@ -132,7 +132,7 @@ const getHash = (
 	options: TransformOptions,
 	versionSalt: string,
 	hashOptionsString: string,
-	tsconfigHash: string | undefined,
+	tsconfigHash: string | undefined
 ) => fastHashParts(code, filePath, hashOptionsString, tsconfigHash ?? stringifyStable(options.tsconfigRaw), versionSalt);
 
 const getPathname = (value: string) => {

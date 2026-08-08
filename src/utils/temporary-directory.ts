@@ -30,5 +30,5 @@ export const tmpdir = path.join(os.tmpdir(), `tsnode-v${cacheSchemaVersion}-${us
 /** Superseded cache directories, removed opportunistically during maintenance. */
 export const legacyTmpdirs = [
 	path.join(os.tmpdir(), 'tsnode'),
-	path.join(os.tmpdir(), `tsnode-${userId}`),
+	path.join(os.tmpdir(), `tsnode-${userId}`)
 ];
