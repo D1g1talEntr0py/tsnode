@@ -1,6 +1,6 @@
 {
 	"name": "@d1g1tal/tsnode",
-	"version": "1.1.2",
+	"version": "1.2.0",
 	"description": "ESM-only Node.js TypeScript runner — run .ts files directly with `tsnode foo.ts`. CommonJS support removed.",
 	"keywords": [
 		"cli",
