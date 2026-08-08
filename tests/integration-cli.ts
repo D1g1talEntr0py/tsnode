@@ -147,6 +147,16 @@ describe('cli integration', () => {
 		expect(result.exitCode).toBe(0);
 	});
 
+	test('runs eval input in-process', async () => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+
+		const { exited } = runCli(['-e', 'console.log(process.ppid)'], fixture.path);
+		const result = await exited;
+
+		expect(Number(result.stdout.trim())).toBe(process.pid);
+		expect(result.exitCode).toBe(0);
+	});
+
 	test('resolves relative TypeScript imports from eval mode', async () => {
 		await using fixture = await createFixture({
 			'package.json': JSON.stringify({ type: 'module' }),
