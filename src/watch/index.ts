@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative, matchesGlob } from 'node:path';
+import { dirname, isAbsolute, join, relative, matchesGlob } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as osConstants } from 'node:os';
 import { parseArgs } from 'node:util';
@@ -7,7 +7,7 @@ import { lightMagenta, lightGreen, yellow } from '../utils/ansi';
 import { run } from '../run';
 import { findFirstPositionalIndex, removeArgvFlags, type Flags } from '../remove-argv-flags';
 import { createIpcServer } from '../utils/ipc/server';
-import { clearScreen, debounce, log } from './utils';
+import { clearScreen, log } from './utils';
 import type { ChildProcess } from 'node:child_process';
 
 type DependencyMessage = {
@@ -15,16 +15,7 @@ type DependencyMessage = {
 	path: string;
 };
 
-type WatchEventHandler = (
-	event: string,
-	stats: unknown,
-	targetPath: string,
-	targetPathNext?: string,
-) => void;
-
-type WatchrWithWatchPath = {
-	watchPath: (targetPath: string, options: object, handler: WatchEventHandler) => Promise<void>;
-};
+type WatchEventHandler = (event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void;
 
 const flags: Flags = {
 	noCache: { type: Boolean },
@@ -128,7 +119,10 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 	let runProcess: ChildProcess | undefined;
 	let exiting = false;
-	const runtimeDependencyPaths = new Set<string>();
+	let rerunInProgress = false;
+	let rerunQueued = false;
+	const currentRuntimeDependencyPaths = new Set<string>();
+	const watchedRuntimeDependencyPaths = new Set<string>();
 	let reRun: (event?: string, filePath?: string) => void | Promise<void> = () => {};
 
 	const server = await createIpcServer();
@@ -138,7 +132,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 		void reRun(event, relativePath.length > 0 && !relativePath.startsWith('..') ? relativePath : changedPath);
 	};
-	const watchrOptions = { ignoreInitial: true, ignore: isIgnoredPath, recursive: true };
+	const watchrOptions = { ignoreInitial: true, ignore: isIgnoredPath, recursive: true, debounce: 100 };
 	const watcher = new Watchr(watchTargets, watchrOptions, onWatchEvent);
 
 	server.on('data', (data) => {
@@ -147,14 +141,28 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 			const dependencyPath = data.path.startsWith('file:') ? fileURLToPath(data.path) : data.path;
 
 			if (isAbsolute(dependencyPath)) {
-				if (!runtimeDependencyPaths.has(dependencyPath) && !isIgnoredPath(dependencyPath)) {
-					runtimeDependencyPaths.add(dependencyPath);
-					// TODO - Make Watchr.watchPath() public and use it here instead of casting to unknown
-					void (watcher as unknown as WatchrWithWatchPath).watchPath(dependencyPath, watchrOptions, onWatchEvent);
+				if (!isIgnoredPath(dependencyPath)) {
+					currentRuntimeDependencyPaths.add(dependencyPath);
+				}
+
+				if (!watchedRuntimeDependencyPaths.has(dependencyPath) && currentRuntimeDependencyPaths.has(dependencyPath)) {
+					watchedRuntimeDependencyPaths.add(dependencyPath);
+					void watcher.watchPath(dependencyPath, watchrOptions, onWatchEvent);
 				}
 			}
 		}
 	});
+
+	const reconcileRuntimeDependencies = () => {
+		for (const dependencyPath of watchedRuntimeDependencyPaths) {
+			if (!currentRuntimeDependencyPaths.has(dependencyPath)) {
+				watcher.watchersClose(dirname(dependencyPath), dependencyPath);
+				watchedRuntimeDependencyPaths.delete(dependencyPath);
+			}
+		}
+
+		currentRuntimeDependencyPaths.clear();
+	};
 
 	const spawnProcess = () => {
 		if (exiting) { return }
@@ -173,7 +181,10 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 			}
 		}, forceKillOnTimeout);
 
-		const waitForExit = new Promise<number | null>((resolve) => {
+		waitingChildExit = true;
+		childProcess.kill(signal);
+
+		return new Promise<number | null>((resolve) => {
 			childProcess.once('exit', (exitCode) => {
 				exited = true;
 				waitingChildExit = false;
@@ -181,39 +192,52 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 				resolve(exitCode);
 			});
 		});
-
-		waitingChildExit = true;
-		childProcess.kill(signal);
-
-		return waitForExit;
 	};
 
-	reRun = debounce(async (event?: string, filePath?: string) => {
+	reRun = async (event?: string, filePath?: string) => {
 		const reason = event ? `${lightMagenta(event)}${filePath ? ` in ${lightGreen(`./${filePath}`)}` : ''}` : '';
 
-		if (waitingChildExit) {
-			log(reason, yellow('Process hasn\'t exited. Killing process...'));
-			runProcess!.kill('SIGKILL');
+		if (rerunInProgress) {
+			if (event) { rerunQueued = true }
+
 			return;
 		}
 
-		// If not first run
-		if (runProcess) {
-			// If process still running
-			if (runProcess.exitCode === null) {
-				log(reason, yellow('Restarting...'));
-				await killProcess(runProcess);
-			} else {
-				log(reason, yellow('Rerunning...'));
+		rerunInProgress = true;
+
+		try {
+			if (waitingChildExit) {
+				log(reason, yellow('Process hasn\'t exited. Killing process...'));
+				runProcess!.kill('SIGKILL');
+				return;
 			}
 
-			if (options.clearScreen) { process.stdout.write(clearScreen) }
+			// If not first run
+			if (runProcess) {
+				// If process still running
+				if (runProcess.exitCode === null) {
+					log(reason, yellow('Restarting...'));
+					await killProcess(runProcess);
+				} else {
+					log(reason, yellow('Rerunning...'));
+				}
+
+				if (options.clearScreen) { process.stdout.write(clearScreen) }
+
+				reconcileRuntimeDependencies();
+			}
+
+			runProcess = spawnProcess();
+		} finally {
+			rerunInProgress = false;
+			if (rerunQueued) {
+				rerunQueued = false;
+				await reRun();
+			}
 		}
+	};
 
-		runProcess = spawnProcess();
-	}, 100);
-
-	reRun();
+	void reRun();
 
 	const relaySignal = (signal: NodeJS.Signals) => {
 		// Disable further spawns
@@ -221,9 +245,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 		// Child is still running, kill it
 		if (runProcess?.exitCode === null) {
-			if (waitingChildExit) {
-				log(yellow('Previous process hasn\'t exited yet. Force killing...'));
-			}
+			if (waitingChildExit) { log(yellow('Previous process hasn\'t exited yet. Force killing...')) }
 
 			// Second Ctrl+C force kills
 			killProcess(runProcess, waitingChildExit ? 'SIGKILL' : signal).then((exitCode) => process.exit(exitCode ?? 0), () => {});
@@ -244,5 +266,5 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	 * As an alternative, we watch cwd and all run-time dependencies
 	 */
 	// On "Return" key
-	process.stdin.on('data', () => reRun('Return key'));
+	process.stdin.on('data', () => void reRun('Return key'));
 };

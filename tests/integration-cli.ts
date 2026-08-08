@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
@@ -350,5 +351,27 @@ describe('cli integration', () => {
 
 		expect(result.exitCode).not.toBe(0);
 		expect(result.stderr).toContain('boom');
+	});
+
+	test('reruns watch mode when a dependency changes', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'import { value } from "./value.ts"; console.log(`watch:${value}`); setInterval(() => {}, 1000);\n',
+			'value.ts': 'export const value: number = 1;\n',
+		});
+
+		const { childProcess, read, exited } = runCli(['watch', 'main.ts'], fixture.path, { TSNODE_DISABLE_IN_PROCESS: '1' });
+
+		try {
+			await waitForStdout(read, 'watch:1');
+
+			await writeFile(path.join(fixture.path, 'value.ts'), 'export const value: number = 2;\n');
+
+			await waitForStdout(read, 'watch:2');
+		} finally {
+			childProcess.kill('SIGINT');
+			await exited;
+		}
 	});
 });
