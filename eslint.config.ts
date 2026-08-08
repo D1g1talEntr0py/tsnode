@@ -53,7 +53,7 @@ export default defineConfig(
 			'linebreak-style': ['error', 'unix'],
 			quotes: 'off',
 			semi: 'off',
-			'comma-dangle': ['error', 'on'],
+			'comma-dangle': ['error', 'never'],
 			'prefer-rest-params': 'off',
 			'no-empty': 'off',
 			'@typescript-eslint/unbound-method': 'off',
