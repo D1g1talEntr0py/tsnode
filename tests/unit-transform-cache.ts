@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import cache from '../src/utils/transform/cache';
+import cache, { forEachConcurrent } from '../src/utils/transform/cache';
 import { tmpdir } from '../src/utils/temporary-directory';
 
 const cacheDirectory = tmpdir;
@@ -133,5 +133,25 @@ describe('transform cache', () => {
 		// Unlink is fire-and-forget; give it a turn to land.
 		await settle();
 		expect(fs.existsSync(filePath)).toBe(false);
+	});
+
+	test('bounds concurrent cache maintenance work', async () => {
+		let activeTasks = 0;
+		let maximumActiveTasks = 0;
+
+		await forEachConcurrent(Array.from({ length: 40 }, (_, index) => index), 4, async () => {
+			activeTasks += 1;
+			maximumActiveTasks = Math.max(maximumActiveTasks, activeTasks);
+			await nextTurn();
+			activeTasks -= 1;
+		});
+
+		expect(maximumActiveTasks).toBe(4);
+	});
+
+	test('throws for non-positive concurrency values', async () => {
+		await expect(forEachConcurrent([], 0, async () => {})).rejects.toThrow(RangeError);
+		await expect(forEachConcurrent([], -1, async () => {})).rejects.toThrow(RangeError);
+		await expect(forEachConcurrent([], 1.5, async () => {})).rejects.toThrow(RangeError);
 	});
 });

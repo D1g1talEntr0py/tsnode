@@ -40,6 +40,16 @@ const maxCacheAgeMs = 7 * 24 * 60 * 60 * 1000;
  */
 const minSweepIntervalMs = 24 * 60 * 60 * 1000;
 
+/**
+ * Maximum concurrency for sweeping the cache directory. The sweep is I/O bound, so a higher concurrency is better than a lower one, but too high and the OS will
+ * start throttling. 16 was measured to be the sweet spot on macOS.
+ * The concurrency is limited to the number of entries in the cache directory, so if there are fewer than 16 entries, it will only use that many concurrent operations.
+ * This is a best-effort limit; if the OS throttles, the sweep will still complete, but it may take longer.
+ * The concurrency is also limited to the number of available file descriptors, so if the process is running with a low ulimit, it may not be able to open 16 files at once.
+ * This is a best-effort limit;
+ */
+const maxSweepConcurrency = 16;
+
 /** Records when the last sweep ran. Not a cache entry; excluded from expiry. */
 const sweepMarkerName = '.last-sweep';
 
@@ -48,6 +58,19 @@ type Cache<T> = {
 	set: (key: string, value: T) => Cache<T>;
 	has: (key: string) => boolean;
 	clear: () => void;
+};
+
+export const forEachConcurrent = async <T>(values: T[], concurrency: number, task: (value: T) => Promise<void>) => {
+	if (!Number.isInteger(concurrency) || concurrency < 1) {
+		throw new RangeError(`Concurrency must be a positive integer, got ${concurrency}`);
+	}
+
+	let nextIndex = 0;
+	const worker = async () => {
+		while (nextIndex < values.length) { await task(values[nextIndex++]) }
+	};
+
+	await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
 };
 
 class FileCache<T> implements Cache<T> {
@@ -330,14 +353,14 @@ class FileCache<T> implements Cache<T> {
 
 		const expiredBefore = Date.now() - maxCacheAgeMs;
 
-		await Promise.all(fileNames.map(async (fileName) => {
+		await forEachConcurrent(fileNames, maxSweepConcurrency, async (fileName) => {
 			if (fileName === sweepMarkerName) { return }
 
 			const filePath = path.join(this.#cacheDirectory, fileName);
 			try {
 				if ((await stat(filePath)).mtimeMs < expiredBefore) { await unlink(filePath) }
 			} catch {}
-		}));
+		});
 	}
 
 	async #cacheRemover(directory: string) {
