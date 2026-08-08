@@ -174,13 +174,10 @@ if (typeEntries.size === 0) {
 
 const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const run = (args: string[]) => {
-	const result = spawnSync(command, args, {
-		stdio: 'inherit',
-		env: process.env,
-	});
+	const result = spawnSync(command, args, { stdio: 'inherit', env: process.env });
 
 	if (result.status !== 0) {
-		process.exit(result.status ?? 1);
+		throw new Error(`Command failed with exit code ${result.status ?? 1}: ${command} ${args.join(' ')}`);
 	}
 };
 
@@ -209,7 +206,7 @@ try {
 		...typeEntries.keys(),
 	]);
 
-	for (const [sourcePath, outputPath] of typeEntries) {
+	for (const [ sourcePath, outputPath ] of typeEntries) {
 		await writePublicDeclaration(sourcePath, outputPath);
 	}
 } finally {
