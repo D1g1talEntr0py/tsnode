@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createFixture } from 'fs-fixture';
-import { tmpdir as tsxCacheDirectory } from '../../src/utils/temporary-directory';
 import { isFeatureSupported, type Version } from '../../src/utils/node-features';
 import type { SpecifierStyle } from './utils/generate-fixture';
 import { scenarios, type Scenario } from './utils/scenarios';
@@ -101,10 +100,20 @@ const moduleCounts = scale ? scaleCounts : [modules];
 const log = (message = '') => process.stderr.write(`${message}\n`);
 const out = (message = '') => process.stdout.write(`${message}\n`);
 
-const clearTransformCache = () => fs.rm(tsxCacheDirectory, {
-	recursive: true,
-	force: true,
-});
+await using benchmarkCacheRoot = await createFixture();
+const isolatedCacheEnv = {
+	TEMP: benchmarkCacheRoot.path,
+	TMP: benchmarkCacheRoot.path,
+	TMPDIR: benchmarkCacheRoot.path,
+};
+const preservedCacheDirectories = new Set(['node-compile-cache']);
+const clearTransformCache = async () => {
+	for (const entry of await fs.readdir(benchmarkCacheRoot.path)) {
+		if (!preservedCacheDirectories.has(entry)) {
+			await fs.rm(path.join(benchmarkCacheRoot.path, entry), { recursive: true, force: true });
+		}
+	}
+};
 
 type Row = {
 	scenario: string;
@@ -128,14 +137,14 @@ const measureCell = async (
 	if (usesCache) {
 		await clearTransformCache();
 	}
-	await runOnce(node.path, args, fixturePath);
+	await runOnce(node.path, args, fixturePath, isolatedCacheEnv);
 
 	const results: RunResult[] = [];
 	for (let run = 0; run < runs; run += 1) {
 		if (usesCache && cold) {
 			await clearTransformCache();
 		}
-		results.push(await runOnce(node.path, args, fixturePath));
+		results.push(await runOnce(node.path, args, fixturePath, isolatedCacheEnv));
 	}
 	return results;
 };

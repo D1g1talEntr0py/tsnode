@@ -1,7 +1,19 @@
 import { describe, expect, test } from 'vitest';
+import { createFixture } from 'fs-fixture';
+import { runOnce } from './benchmarks/utils/run';
 import { scenarios } from './benchmarks/utils/scenarios';
 
 describe('benchmark scenarios', () => {
+	test('passes an isolated cache environment to benchmark children', async () => {
+		await using fixture = await createFixture({
+			'main.js': 'console.log(`__BENCH__${JSON.stringify({ first: Number(process.env.BENCH_VALUE), last: 9, maxRssKb: 1 })}`);',
+		});
+
+		const result = await runOnce(process.execPath, ['main.js'], fixture.path, { BENCH_VALUE: '7' });
+
+		expect(result.loadMs).toBe(7);
+		expect(result.evalMs).toBe(2);
+	});
 	test('every scenario has required fields', () => {
 		for (const scenario of scenarios) {
 			expect(typeof scenario.name, `${scenario.name}: name`).toBe('string');

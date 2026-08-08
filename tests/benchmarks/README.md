@@ -45,7 +45,7 @@ The default set remains focused on high-signal startup and transform behavior.
 | `-m, --modules` | Module count (ignored with `--scale`) | `1000` |
 | `-s, --specifier` | `esm-ts` import style: `ts`, `js`, `extensionless` | `ts` |
 | `-r, --runs` | Timed runs per cell | `5` |
-| `--cold` | Clear the tsnode transform cache before every run | `false` |
+| `--cold` | Clear each runner's sandboxed transform cache before every run | `false` |
 | `--scale` | Sweep module counts 10/100/300/1000; report per-module cost + fixed tax | `false` |
 | `--json` | Emit raw per-run results as JSON (stdout) | `false` |
 
@@ -69,4 +69,4 @@ Scenarios below their `minNodeVersion` are skipped, not failed.
 
 ## Reproducibility
 
-The tsnode transform cache is reset before each cell's warmup to avoid stale-file skew (a large `$TMPDIR/tsnode-<uid>` degrades warm runs via a linear cache scan). Runs are interleaved after warmup.
+Runner caches are isolated under a disposable temporary directory and reset before each cell's warmup to avoid stale-file and cross-runner skew. Cold runs clear that sandbox before every measurement while preserving Node's compile cache.

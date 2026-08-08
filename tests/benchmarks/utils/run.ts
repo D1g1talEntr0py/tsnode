@@ -36,12 +36,14 @@ export const runOnce = async (
 	nodePath: string,
 	args: string[],
 	cwd: string,
+	env?: NodeJS.ProcessEnv,
 ): Promise<RunResult> => new Promise((resolve, reject) => {
 	const startTime = performance.now();
 	let stdout = '';
 	let stderr = '';
 	const childProcess = spawn(nodePath, args, {
 		cwd,
+		env: env ? { ...process.env, ...env } : process.env,
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 

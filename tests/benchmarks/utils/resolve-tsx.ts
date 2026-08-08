@@ -6,6 +6,7 @@ export type ComparisonImplementation = {
 	name: string;
 	cliPath: string;
 	esmLoaderPath?: string;
+	version?: string;
 };
 
 type PackageTarget = {
@@ -23,7 +24,7 @@ const packageTargets: Record<string, PackageTarget> = {
 	'ts-node': {
 		packageName: 'ts-node',
 		binName: 'ts-node-esm',
-		installSpecs: ['ts-node', 'typescript@npm:@typescript/typescript6@^6.0.2'],
+		installSpecs: ['ts-node@latest', 'typescript@npm:@typescript/typescript6@latest'],
 	},
 	jiti: {
 		packageName: 'jiti',
@@ -70,6 +71,15 @@ const readPackageBinPath = async (
 	throw new Error(`Could not resolve ${binName} from ${packageJsonPath}`);
 };
 
+const readPackageVersion = async (packageRoot: string): Promise<string | undefined> => {
+	const packageJsonPath = path.join(packageRoot, 'package.json');
+	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as {
+		version?: string;
+	};
+
+	return packageJson.version;
+};
+
 const installAndResolveComparisonPackage = async (
 	packageName: string,
 	binName: string,
@@ -78,6 +88,7 @@ const installAndResolveComparisonPackage = async (
 ): Promise<ComparisonImplementation> => {
 	const packageRoot = path.join(installDirectory, 'node_modules', packageName);
 	const binPath = path.join(packageRoot, await readPackageBinPath(packageRoot, binName));
+	const version = await readPackageVersion(packageRoot);
 
 	if (!(await statSafe(binPath))) {
 		throw new Error(`Installed ${label} without ${binName}`);
@@ -98,6 +109,7 @@ const installAndResolveComparisonPackage = async (
 		name: label,
 		cliPath: binPath,
 		esmLoaderPath,
+		version,
 	};
 };
 
@@ -111,7 +123,7 @@ const resolveComparisonTarget = (
 		return {
 			...target,
 			displayName: version ? `${match[1]}@${version}` : match[1],
-			installSpecifier: version ? `${target.packageName}@${version}` : target.packageName,
+			installSpecifier: version ? `${target.packageName}@${version}` : `${target.packageName}@latest`,
 		};
 	}
 

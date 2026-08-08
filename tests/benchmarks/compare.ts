@@ -148,6 +148,7 @@ type ComparisonImplementation = {
 	name: string;
 	cliPath: string;
 	esmLoaderPath?: string;
+	version?: string;
 };
 
 let comparisonImplementations: ComparisonImplementation[] = [];
@@ -258,6 +259,19 @@ console.log(JSON.stringify({ totalArea: totalArea.toFixed(2), color, dir, stats 
 process.stdout.write('Setting up benchmark environment…\n');
 
 await using installRoot = await createFixture();
+
+const readVersion = async (packageJsonPath: string): Promise<string | undefined> => {
+	try {
+		const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { version?: string };
+		return packageJson.version;
+	} catch {
+		return undefined;
+	}
+};
+
+const formatVersion = (version?: string) => version ?? 'unknown';
+
+const localTsnodeVersion = await readVersion(path.resolve(__dirname, '../../package.json'));
 comparisonImplementations = await Promise.all(
 	comparisonTargets.map(async target => {
 		const implementation = await resolveComparison(target, installRoot.path);
@@ -265,9 +279,17 @@ comparisonImplementations = await Promise.all(
 			name: implementation.name,
 			cliPath: implementation.cliPath,
 			esmLoaderPath: implementation.esmLoaderPath,
+			version: implementation.version,
 		};
 	}),
 );
+
+process.stdout.write('Benchmark versions:\n');
+process.stdout.write(`  tsnode: ${formatVersion(localTsnodeVersion)}\n`);
+for (const implementation of comparisonImplementations) {
+	process.stdout.write(`  ${implementation.name}: ${formatVersion(implementation.version)}\n`);
+}
+process.stdout.write('\n');
 
 const tsxImplementation = comparisonImplementations.find(implementation => implementation.name === 'tsx');
 
