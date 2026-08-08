@@ -284,6 +284,8 @@ const canTryDirectRuntimeResolve = (specifier: string, context: ResolveHookConte
 const createResolveWithoutNamespace = (hookData: Data): ResolveHookSync => ((specifier, context, nextResolve) => {
 	if (!hookData.active || specifier.startsWith('node:')) { return nextResolve(specifier, context) }
 
+	if (hookData.virtualSources?.has(specifier)) { return { format: 'module', shortCircuit: true, url: specifier } }
+
 	if (canUseDirectFileResolve(specifier, hookData)) { return shouldFinalizeDirectResolve(nextResolve(specifier, context)) }
 
 	if (canTryDirectRuntimeResolve(specifier, context, hookData)) {

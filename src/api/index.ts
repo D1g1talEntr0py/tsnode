@@ -1,7 +1,9 @@
-import { register } from './register';
+import { register, registerScoped } from './register';
 import type { TsconfigOptions } from '../types';
 
 type Options = { parentURL: string, onImport?: (url: string) => void, tsconfig?: TsconfigOptions };
+
+let nextImportNamespace = 0;
 
 export { register };
 export const tsImport = (specifier: string, options: string | Options) => {
@@ -13,7 +15,7 @@ export const tsImport = (specifier: string, options: string | Options) => {
 
 	// We don't want to unregister this after load since there can be child import() calls that need TS support.
 	// This is not accessible to others because of the namespace.
-	return register({ ...options, namespace: Date.now().toString() }).import(specifier, options.parentURL);
+	return registerScoped({ ...options, namespace: `tsImport-${nextImportNamespace += 1}` }).import(specifier, options.parentURL);
 };
 
 export type { NamespacedUnregister, Register, RegisterHandle, RegisterOptions, Unregister } from '../types';
