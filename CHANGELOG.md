@@ -1,3 +1,80 @@
+## [1.3.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.2.0...v1.3.0) (2026-08-12)
+* **cli:** add in-process support for --print eval mode (901943ef73e3a9188737276d49f8f9043c5931af)
+- Introduces runPrintInProcess to mirror node --print completion-value output for transpiled TypeScript
+- Tracks transformedPrintCode separately from transformedEvalCode so both paths can run in-process
+- Updates canRunEvalInProcess guard to allow either eval or print code to qualify
+- Dispatches to the correct runner based on which code variant is present
+
+* **types:** make unregister synchronous and tighten public types (8db51d7be45a431568f1beeb2d32b9c9803bc1eb)
+- Changes Unregister return type from Promise<void> to void since no async work is needed
+- Narrows ScopedImport return from Promise<any> to Promise<unknown> for better type safety
+- Moves virtualSources into the public RegisterOptions type so callers no longer need a cast
+
+* **cli:** prevent async signal handler from floating as unhandled promise (48fd2a8cf39724700e59aa67b2d22f84a5af0430)
+- Wraps the async body of relaySignalToChild in void (async () => {})() so the promise is intentionally discarded rather than returned, avoiding potential unhandled-rejection warnings
+
+* **preflight:** prevent floating promise and fix listener override args (f4fe5bedfeb45ae377254aeb0e0dbcfc25b86b73)
+- Wraps the async signal-relay startup in void (async () => {})()
+- Passes explicit argument arrays to Reflect.apply in listenerCount/listeners overrides instead of the arguments object
+- Adds JSDoc to both override methods
+- Condenses single-branch if-blocks to one-liners for consistency
+
+* **register:** make unregister callbacks synchronous (ad9441487af011df5a487f9ac0ed582338924827)
+- Removes async from both the scoped and global unregister closures, aligning with the updated Unregister type
+- Adds JSDoc overload comments to the register() function for better IDE discoverability
+
+* **repl:** prevent floating promise in REPL eval patch (e2c08847ccb1cd6ebe11e1fd6b4f94c445ad9f10)
+- Wraps the async transform logic in a void IIFE inside a synchronous REPLEval function
+- Switches repl.start override to use rest parameters instead of arguments to avoid implicit-eval lint issues
+- Adds JSDoc to the patched eval and start functions
+
+* **suppress-warnings:** tighten process.emit override typing (70f4be2d936ae637a48b0d37b30c67e04c16d808)
+- Uses generic event-map typing instead of any for the overridden process.emit
+- Guards the warning suppression with an instanceof check to avoid suppressing non-Error warning events
+- Uses !! on the Reflect.apply return to guarantee a boolean result
+
+* add JSDoc and tighten empty-catch comments across codebase (e5f54cf0ee4f2d9e4bdcc2f9a40c92764b9fc97b)
+- Standardises empty catch blocks with /* ignore */ or /* ignored */ comments to satisfy the no-empty lint rule
+- Adds JSDoc to several utility functions (path-utils, watch/index, run-in-process)
+- Condenses multi-line try/catch blocks to one-liners where appropriate
+- Fixes minor formatting in IPC server (array spacing, missing semicolon)
+
+* **cache:** add JSDoc and minor code quality fixes to FileCache (86ee87c2ea70365f4059f68cfb5f7c01db64cdf1)
+- Adds JSDoc to all public and private methods of FileCache
+- Wraps setImmediate async callback in void IIFE to avoid floating promise
+- Uses void prefix on async flush call inside setImmediate
+- Fixes minor comment wording (libuv thread pool, statting -> getting)
+
+* **eslint:** overhaul ESLint flat config (0e5283bc85dc9103d9544b8fc41d8dc81aa02ecf)
+- Consolidates onto the unified typescript-eslint package, removing separate parser and plugin imports
+- Enables recommendedTypeChecked ruleset for stricter type-aware linting
+- Tightens formatting rules: tabs for indentation, single quotes, semicolons with one-liner exemptions
+- Enables jsdoc/require-jsdoc for classes and methods to enforce documentation
+- Simplifies ignore patterns and removes the separate scripts override block
+
+* **hooks:** add JSDoc to hook utility functions (b92e0c91457906da308e03e8a9f45ff7e057789a)
+* **hooks:** minor type safety and code quality improvements (8fb81cbdc550625649b45cd4e067b073e1944d0a)
+- Adds explicit cast for Object.create(null) result in resolve.ts to preserve the Record type
+- Casts caught unknown errors to Error where rethrown, satisfying use-unknown-in-catch-variables
+- Adds eslint-disable comment for a double-quote string literal required by the replace logic
+- Simplifies scoped-import by removing an unused type import and unnecessary parentheses
+- Simplifies initialize.ts virtualSources access by removing an unnecessary cast
+- Simplifies load.ts by removing a redundant guard around parent.send
+- Reorders imports in load.ts for consistency
+
+* **transform:** replace formatEsbuildError with a type guard (2181f2f103702b5b4ed04633cb94fb74edf02788)
+- Introduces isTransformFailure() to safely identify esbuild TransformFailure objects without casting
+- Removes the @ts-expect-error deletes by inlining the mutation at the catch site
+- Casts the esbuild module load result to EsbuildModule to restore the inferred type after dynamic require
+- Adds JSDoc to stripTypes
+
+* **deps:** bump pnpm and dependency versions (22408a508d8c94949d5c20fc6fbf151bdef166a2)
+- Upgrades pnpm from 11.20.0 to 11.21.0
+- Updates @d1g1tal/watchr, esbuild, @types/node, eslint, eslint-plugin-jsdoc, and typescript-eslint to latest minor/patch versions
+- Removes standalone @typescript-eslint/eslint-plugin and @typescript-eslint/parser in favour of the unified typescript-eslint package
+- Adds temporal-polyfill-lite as a transitive dependency of @d1g1tal/watchr 3.2.1
+- Removes minimumReleaseAgeExclude workaround from pnpm-workspace.yaml now that watchr 3.2.1 is stable
+
 ## [1.2.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.1.2...v1.2.0) (2026-08-08)
 * **loader:** share scoped hooks across dynamic imports (6881368cd150e8c0dfe088e0431402bbf0f82833)
 - adds a shared hook chain for scoped registrations
