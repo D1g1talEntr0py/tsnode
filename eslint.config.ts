@@ -1,83 +1,70 @@
 import eslint from '@eslint/js';
 import { defineConfig } from 'eslint/config';
 import jsdoc from 'eslint-plugin-jsdoc';
-import tsEslint from 'typescript-eslint';
-import tsParser from '@typescript-eslint/parser';
-import typeScriptEslint from '@typescript-eslint/eslint-plugin';
+import tslint from 'typescript-eslint';
 
-export default defineConfig(
-	{
-		ignores: [
-			'node_modules/**',
-			'dist/**',
-			'benchmarks/**',
-			'tests/**',
-			'*.config.[tj]s',
-			'src/@types/**'
-		]
+export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**', '*.config.ts' ] }, {
+	extends: [
+		eslint.configs.recommended,
+		jsdoc.configs['flat/recommended-typescript'],
+		...tslint.configs.recommended,
+		...tslint.configs.recommendedTypeChecked
+	],
+	plugins: { '@typescript-eslint': tslint.plugin, jsdoc },
+	languageOptions: {
+		parser: tslint.parser,
+		parserOptions: {
+			project: true,
+			ecmaFeatures: {	impliedStrict: true	},
+			tsconfigRootDir: import.meta.dirname,
+			allowAutomaticSingleRunInference: true,
+			warnOnUnsupportedTypeScriptVersion: false
+		}
 	},
-	{
-		extends: [
-			eslint.configs.recommended,
-			...tsEslint.configs.recommended
+	settings: {
+		jsdoc: {
+			mode: 'typescript',
+			structuredTags: {
+				template: { name: 'namepath-defining', type: true }
+			}
+		}
+	},
+	rules: {
+		'jsdoc/require-returns': 0,
+		'jsdoc/check-param-names': [ 'error', { checkDestructured: false	}	],
+		'jsdoc/require-param': [ 'error',	{ checkDestructured: false } ],
+		'jsdoc/tag-lines': 0,
+		'jsdoc/no-defaults': 0,
+		'jsdoc/require-jsdoc': [ 'error',	{
+				exemptEmptyConstructors: true,
+				checkConstructors: false,
+				require: {
+					ClassDeclaration: true,
+					FunctionExpression: true,
+					MethodDefinition: true
+				}
+			}
 		],
-		linterOptions: {
-			reportUnusedDisableDirectives: 'off'
-		},
-		// @ts-expect-error plugin needs update for flat typing interop
-		plugins: { typeScriptEslint, jsdoc },
-		languageOptions: {
-			parserOptions: {
-				parser: tsParser,
-				parserOptions: {
-					ecmaFeatures: { impliedStrict: true }
-				}
-			}
-		},
-		settings: {
-			jsdoc: {
-				mode: 'typescript',
-				structuredTags: {
-					template: { name: 'namepath-defining', type: true }
-				}
-			}
-		},
-		rules: {
-			'jsdoc/require-jsdoc': 'off',
-			'jsdoc/require-param': 'off',
-			'jsdoc/require-returns': 'off',
-			'jsdoc/check-param-names': 'off',
-			'jsdoc/tag-lines': 'off',
-			'jsdoc/no-defaults': 'off',
-			indent: 'off',
-			'linebreak-style': ['error', 'unix'],
-			quotes: 'off',
-			semi: 'off',
-			'comma-dangle': ['error', 'never'],
-			'prefer-rest-params': 'off',
-			'no-empty': 'off',
-			'@typescript-eslint/unbound-method': 'off',
-			'@typescript-eslint/no-explicit-any': 'off',
-			'@typescript-eslint/ban-ts-comment': 'off',
-			'@typescript-eslint/no-unused-expressions': 'off',
-			'@typescript-eslint/restrict-template-expressions': 'off',
-			'@typescript-eslint/no-unsafe-enum-comparison': 'off',
-			'@typescript-eslint/method-signature-style': 'off',
-			'@typescript-eslint/no-unused-vars': ['error', {
-				args: 'all',
-				argsIgnorePattern: '^_',
-				caughtErrors: 'all',
-				caughtErrorsIgnorePattern: '^_',
-				destructuredArrayIgnorePattern: '^_',
-				varsIgnorePattern: '^_',
-				ignoreRestSiblings: true
-			}]
-		}
-	},
-	{
-		files: ['scripts/**/*.js'],
-		rules: {
-			'jsdoc/no-types': 'off'
-		}
+		'comma-dangle': ['error', 'never'],
+		indent:  ['error', 'tab', { SwitchCase: 1 } ],
+		'linebreak-style': ['error', 'unix'],
+		quotes: ['error', 'single'],
+		semi: ['error', 'always', {
+			omitLastInOneLineBlock: true,
+			omitLastInOneLineClassBody: true
+		}],
+		'@typescript-eslint/unbound-method': 'off',
+		'@typescript-eslint/restrict-template-expressions': 'off',
+		'@typescript-eslint/no-unsafe-enum-comparison': 'off',
+		"@typescript-eslint/method-signature-style": ["error", "property"],
+		'@typescript-eslint/no-unused-vars': ['error', {
+			args: 'all',
+			argsIgnorePattern: '^_',
+			caughtErrors: 'all',
+			caughtErrorsIgnorePattern: '^_',
+			destructuredArrayIgnorePattern: '^_',
+			varsIgnorePattern: '^_',
+			ignoreRestSiblings: true
+		}]
 	}
-);
+});
