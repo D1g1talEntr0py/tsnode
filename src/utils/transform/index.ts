@@ -28,16 +28,14 @@ const getEsbuildVersionSalt = () => esbuildVersionSalt ?? (esbuildVersionSalt = 
 
 let esbuildModule: EsbuildModule | undefined;
 
-const getEsbuildModuleSync = () => esbuildModule ?? (esbuildModule = getLoadModule()('esbuild'));
+const getEsbuildModuleSync = () => esbuildModule ?? (esbuildModule = getLoadModule()('esbuild') as EsbuildModule);
 
-const formatEsbuildError = (error: TransformFailure) => {
-	error.name = 'TransformError';
-	// @ts-expect-error deleting non-option property
-	delete error.errors;
-	// @ts-expect-error deleting non-option property
-	delete error.warnings;
+const isTransformFailure = (error: unknown): error is TransformFailure => {
+	if (error === null || typeof error !== 'object') { return false }
 
-	throw error;
+	const maybeError = error as TransformFailure;
+
+	return 'errors' in maybeError && Array.isArray(maybeError.errors) && 'warnings' in maybeError && Array.isArray(maybeError.warnings);
 };
 
 // tsconfigRaw is a stable object reference per project but can be large; cache its serialization instead of re-stringifying per transformed file
@@ -103,6 +101,8 @@ const stripVersionSalt = `-strip-${process.versions.node}`;
  * warm runs skip amaro's WASM initialization entirely. Output doesn't
  * depend on the file path (no source map is generated), so the hash
  * doesn't include it, deduplicating identical sources.
+ * @param code The TypeScript source code to strip.
+ * @returns The stripped code.
  */
 export const stripTypes = (code: string): Transformed => {
 	const hash = fastHashPair(code, stripVersionSalt);
@@ -167,7 +167,15 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 		try {
 			result = getEsbuildModuleSync().transformSync(code, esbuildOptions);
 		} catch (error) {
-			throw formatEsbuildError(error as TransformFailure);
+			if (isTransformFailure(error)) {
+				error.name = 'TransformError';
+				// @ts-expect-error deleting non-option property
+				delete error.errors;
+				// @ts-expect-error deleting non-option property
+				delete error.warnings;
+			}
+
+			throw error;
 		}
 
 		// If the sourcefile has no extension, esbuild doesn't generate a source map, so we patch it in to preserve positions
