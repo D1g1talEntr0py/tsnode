@@ -1,3 +1,5 @@
+import type { ProcessEventMap } from 'node:process';
+
 const ignoreWarnings = new Set([
 	// v18.0.0
 	'Custom ESM Loaders is an experimental feature. This feature could change at any time',
@@ -11,8 +13,20 @@ const ignoreWarnings = new Set([
 
 const emit: typeof process.emit = process.emit;
 
-process.emit = function(event: string | symbol, ...args: any[]): boolean {
-	return event === 'warning' && ignoreWarnings.has(args[0].message) ? true : Reflect.apply(emit, this, arguments);
+/**
+ * Suppresses warnings that are known to be emitted by Node.js when using ts-node.
+ * This is a temporary measure until Node.js stabilizes these features.
+ * @param event The event name.
+ * @param args The event arguments.
+ * @returns True if the event was handled, false otherwise.
+ */
+process.emit = function<E extends keyof ProcessEventMap>(event: E, ...args: ProcessEventMap[E]): boolean {
+	if (event === 'warning') {
+		const maybeWarning: unknown = args[0];
+		if (maybeWarning instanceof Error && ignoreWarnings.has(maybeWarning.message)) { return true }
+	}
+
+	return !!Reflect.apply(emit, this, args);
 };
 
 export {};
