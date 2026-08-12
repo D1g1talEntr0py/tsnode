@@ -15,12 +15,13 @@ export type TsconfigOptions = false | string;
 export type RegisterOptions = {
 	namespace?: string;
 	onImport?: (url: string) => void;
+	virtualSources?: Map<string, string>;
 	tsconfig?: TsconfigOptions;
 };
 
-export type Unregister = () => Promise<void>;
+export type Unregister = () => void;
 
-export type ScopedImport = (specifier: string, parent: string) => Promise<any>;
+export type ScopedImport = (specifier: string, parent: string) => Promise<unknown>;
 
 export type RegisterHandle = {
 	unregister: Unregister;
