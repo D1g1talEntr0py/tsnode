@@ -1,12 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import { parent } from '../utils/ipc/client';
-import { logEsm as log, debugEnabled } from '../utils/debug';
 import { ensureParsedTsconfig, type Data } from './initialize';
-import { isJsonPattern, tsExtensionsPattern, fileUrlPrefix } from '../utils/path-utils';
-import { transformSync, stripTypes, type Transformed } from '../utils/transform';
 import { getTsconfigCacheKey } from '../utils/tsconfig';
+import { logEsm as log, debugEnabled } from '../utils/debug';
+import { transformSync, stripTypes, type Transformed } from '../utils/transform';
+import { isJsonPattern, tsExtensionsPattern, fileUrlPrefix } from '../utils/path-utils';
 import { getNamespace, namespaceQuery, canTryNativeTypeStripping } from './utils';
-
 import type { LoadHook, LoadHookSync } from 'node:module';
 
 type LoadResult = Awaited<ReturnType<LoadHook>> & {	responseURL?: string };
@@ -73,9 +72,7 @@ export const createLoadSync = (hookData: Data): LoadHookSync => {
 		const virtualSource = hookData.virtualSources?.get(url);
 		if (virtualSource !== undefined) { return { format: 'module', source: virtualSource, shortCircuit: true } }
 
-		if (hookData.onImport || parent.send) {
-			parent.send?.({ type: 'dependency', path: notifyLoad(hookData, url) });
-		}
+		parent.send?.({ type: 'dependency', path: notifyLoad(hookData, url) });
 
 		const loaded = nextLoad(url, prepareJsonAttributes(url, context));
 

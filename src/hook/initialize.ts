@@ -34,7 +34,7 @@ export const createData = (options?: RegisterOptions): Data => {
 		namespace: options?.namespace,
 		onImport: options?.onImport,
 		parsedTsconfig: undefined,
-		virtualSources: (options as RegisterOptions & { virtualSources?: Map<string, string> } | undefined)?.virtualSources,
+		virtualSources: options?.virtualSources,
 		tsconfig: options?.tsconfig
 	};
 };

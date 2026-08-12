@@ -19,7 +19,7 @@ const implicitTsExtensions = ['.ts', '.tsx', '.jsx'];
 const localExtensions = [...implicitTsExtensions, ...implicitJsExtensions];
 const dependencyExtensions = [...implicitJsExtensions, ...implicitTsExtensions];
 
-const tsExtensions: Record<string, string[]> = Object.create(null);
+const tsExtensions: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
 tsExtensions['.js'] = [ '.ts', '.tsx', '.js', '.jsx' ];
 tsExtensions['.jsx'] = [ '.tsx', '.ts', '.jsx', '.js' ];
 
@@ -111,7 +111,7 @@ const resolveExtensionsSync = (url: string, context: ResolveHookContext, nextRes
 	if (throwError) {
 		// All candidates were skipped; resolve one to produce a real error
 		if (caughtError === undefined) { return nextResolve(tryPaths[0], context) }
-		throw caughtError;
+		throw caughtError as Error;
 	}
 
 	return undefined;
@@ -192,6 +192,7 @@ const resolveDirectorySync = (specifier: string, context: ResolveHookContext, ne
 					} catch (_error) {
 						const __error = _error as Error;
 						const { message } = __error;
+						// eslint-disable-next-line quotes
 						__error.message = __error.message.replace(`${'/index'.replace('/', sep)}'`, "'");
 						__error.stack = __error.stack!.replace(message, __error.message);
 						throw __error;
@@ -212,7 +213,7 @@ const resolveTsPathsSync = (specifier: string, context: ResolveHookContext, next
 		for (const possiblePath of resolveTsconfigPaths(parsedTsconfig, specifier)) {
 			try {
 				return resolveDirectorySync(pathToFileURL(possiblePath).toString(), context, nextResolve, hookData);
-			} catch {}
+			} catch { /* ignore */ }
 		}
 	}
 
@@ -234,7 +235,7 @@ const getRequestContext = (specifier: string, context: ResolveHookContext, { nam
 
 		// Initial request from tsImport()
 		if (specifier.startsWith(tsnodeProtocol)) {
-			try { tsImportRequest = JSON.parse(specifier.slice(tsnodeProtocol.length)) } catch {}
+			try { tsImportRequest = JSON.parse(specifier.slice(tsnodeProtocol.length)) as TsnodeRequest } catch { /* ignore */ }
 
 			if (tsImportRequest?.namespace) { requestNamespace = tsImportRequest.namespace }
 		}
