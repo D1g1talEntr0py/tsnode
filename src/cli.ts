@@ -6,8 +6,10 @@ import type { ParseArgsOptionsConfig } from 'node:util';
 import type { ChildProcess, Serializable } from 'node:child_process';
 import { normalizeFileUrlPath, resolveEntrypointPath } from './utils/path-utils';
 
+type RunInProcess = (code: string, scriptArgv: string[]) => Promise<void>;
+
 if (typeof enableCompileCache === 'function' && process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
-	try { enableCompileCache() } catch {}
+	try { enableCompileCache() } catch { /* ignored */ }
 }
 
 const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
@@ -170,11 +172,16 @@ if (rawArgv[0] === 'watch') {
 	const evalInput = getEvalInput(values);
 	const evalScriptArgv = evalInput ? [ ...argvFlagsToRun ] : [];
 	let transformedEvalCode: string | undefined;
+	let transformedPrintCode: string | undefined;
 
 	if (evalInput) {
 		// Lazy import so the CLI parent process doesn't pay esbuild's module init cost on every run (transforms happen in the child process)
 		const transformed = (await import('esbuild')).transformSync(evalInput.code, { loader: 'ts', sourcefile: '/eval.ts', ...(evalInput.type === 'eval' ? { format: 'esm' as const } : {}) });
-		if (evalInput.type === 'eval') { transformedEvalCode = transformed.code }
+		if (evalInput.type === 'eval') {
+			transformedEvalCode = transformed.code;
+		} else {
+			transformedPrintCode = transformed.code;
+		}
 
 		argvFlagsToRun.unshift(`--${evalInput.type}`, transformed.code);
 		if (evalInput.type === 'eval' && values['input-type'] !== 'module') { argvFlagsToRun.unshift('--input-type=module') }
@@ -209,7 +216,7 @@ if (rawArgv[0] === 'watch') {
 	 * - The first argument is a plain file (not a directory or extension-less entry)
 	 */
 	const canRunInProcess = (process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && normalizedFirstRunArgument !== undefined && !normalizedFirstRunArgument.startsWith('-') && !process.send && resolvedEntrypointPath !== undefined);
-	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && transformedEvalCode !== undefined && !values.test && !process.send && !evalScriptArgv.some((argument) => argument.startsWith('-'));
+	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && (transformedEvalCode !== undefined || transformedPrintCode !== undefined) && !values.test && !process.send && !evalScriptArgv.some((argument) => argument.startsWith('-'));
 
 	if (canRunInProcess) {
 		// Consumed at module-init time by the cache and tsconfig loaders, so it must be set before the loader graph is imported.
@@ -218,7 +225,13 @@ if (rawArgv[0] === 'watch') {
 
 		await (await import('./run-in-process')).runInProcess(argvFlagsToRun, resolvedEntrypointPath);
 	} else if (canRunEvalInProcess) {
-		await (await import('./run-eval-in-process')).runEvalInProcess(transformedEvalCode!, evalScriptArgv);
+		const evalModule: { runEvalInProcess: RunInProcess, runPrintInProcess: RunInProcess } = await import('./run-eval-in-process');
+
+		if (transformedPrintCode !== undefined) {
+			await evalModule.runPrintInProcess(transformedPrintCode, evalScriptArgv);
+		} else if (transformedEvalCode !== undefined)	 {
+			await evalModule.runEvalInProcess(transformedEvalCode, evalScriptArgv);
+		}
 	} else {
 		const shouldRelaySignals = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
 		// The child can't be spawned until the socket is listening, so overlap `./run` (node:child_process) with that setup.

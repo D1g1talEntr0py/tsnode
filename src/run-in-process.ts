@@ -13,6 +13,8 @@ import { normalizeFileUrlPath } from './utils/path-utils';
  * Only reached when the CLI has determined nothing requires a real child
  * process (see `canRunInProcess` in cli.ts).
  * @param argv Entry path followed by the arguments intended for it.
+ * @param resolvedEntrypointPath The resolved entrypoint path, if already known. If not provided, it will be resolved from the first argument in `argv`.
+ * @returns A promise that resolves when the entry has finished running.
  */
 export const runInProcess = async (argv: string[], resolvedEntrypointPath?: string) => {
 	const [ entry, ...scriptArgv ] = argv;
