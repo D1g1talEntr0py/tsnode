@@ -38,48 +38,50 @@ const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 		return signalWaitPromise;
 	};
 
-	const relaySignalToChild = async (signal: NodeJS.Signals) => {
-		/**
-		 * This callback is triggered if the parent receives a signal
-		 *
-		 * Child could also receive a signal at the same time if it detected
-		 * a keypress or was sent a signal via process group
-		 *
-		 * The preflight registers a signal handler on the child to
-		 * tell the parent if it also received a signal which we wait for here
-		 */
-		const signalFromChild = await waitForSignalFromChild();
-		/**
-		 * If child didn't receive a signal, it's either because it was
-		 * sent to the parent directly via kill PID or the child is
-		 * unresponsive (e.g. infinite loop). Relay signal to child.
-		 */
-		if (signalFromChild !== signal) {
-			childProcess.kill(signal);
+	const relaySignalToChild = (signal: NodeJS.Signals) => {
+		void (async () => {
+			/**
+			 * This callback is triggered if the parent receives a signal
+			 *
+			 * Child could also receive a signal at the same time if it detected
+			 * a keypress or was sent a signal via process group
+			 *
+			 * The preflight registers a signal handler on the child to
+			 * tell the parent if it also received a signal which we wait for here
+			 */
+			const signalFromChild = await waitForSignalFromChild();
+			/**
+			 * If child didn't receive a signal, it's either because it was
+			 * sent to the parent directly via kill PID or the child is
+			 * unresponsive (e.g. infinite loop). Relay signal to child.
+			 */
+			if (signalFromChild !== signal) {
+				childProcess.kill(signal);
 
-			// If child is unresponsive (e.g. infinite loop), we need to force kill it
-			if ((await waitForSignalFromChild()) !== signal) {
-				// This seems to run before the handler registered at the bottom of this file
-				// Seems the latest handler is called first
-				childProcess.on('exit', () => {
-					/**
-					 * Even though this may not be a SIGKILL, I've confirmed Ctrl+C on an infinite looping
-					 * file exits with 130, which is 128 + 2 (SIGINT)
-					 *
-					 * https://nodejs.org/api/process.html#exit-codes
-					 * >128 Signal Exits: If Node.js receives a fatal signal such as SIGKILL or SIGHUP,
-					 * then its exit code will be 128 plus the value of the signal code. This is a
-					 * standard POSIX practice, since exit codes are defined to be 7-bit integers, and
-					 * signal exits set the high-order bit, and then contain the value of the signal code.
-					 * For example, signal SIGABRT has value 6, so the expected exit code will be 128 + 6,
-					 * or 134.
-					 */
-					process.exit(128 + constants.signals[signal]);
-				});
+				// If child is unresponsive (e.g. infinite loop), we need to force kill it
+				if ((await waitForSignalFromChild()) !== signal) {
+					// This seems to run before the handler registered at the bottom of this file
+					// Seems the latest handler is called first
+					childProcess.on('exit', () => {
+						/**
+						 * Even though this may not be a SIGKILL, I've confirmed Ctrl+C on an infinite looping
+						 * file exits with 130, which is 128 + 2 (SIGINT)
+						 *
+						 * https://nodejs.org/api/process.html#exit-codes
+						 * >128 Signal Exits: If Node.js receives a fatal signal such as SIGKILL or SIGHUP,
+						 * then its exit code will be 128 plus the value of the signal code. This is a
+						 * standard POSIX practice, since exit codes are defined to be 7-bit integers, and
+						 * signal exits set the high-order bit, and then contain the value of the signal code.
+						 * For example, signal SIGABRT has value 6, so the expected exit code will be 128 + 6,
+						 * or 134.
+						 */
+						process.exit(128 + constants.signals[signal]);
+					});
 
-				childProcess.kill(constants.signals.SIGKILL);
+					childProcess.kill(constants.signals.SIGKILL);
+				}
 			}
-		}
+		})();
 	};
 
 	process.on('SIGINT', relaySignalToChild);
