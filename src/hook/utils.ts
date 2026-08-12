@@ -10,6 +10,8 @@ const typescriptFilePattern = /\.ts($|\?)/;
 /**
  * Node refuses to strip types inside node_modules
  * (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), so dependencies always go through esbuild
+ * @param url The file URL to check.
+ * @returns True if the file URL is a TypeScript file outside node_modules, otherwise false.
  */
 export const isNativeFileUrl = (url: string) => (typescriptFilePattern.test(url) && !url.includes('/node_modules/'));
 
@@ -19,6 +21,8 @@ export const isNativeFileUrl = (url: string) => (typescriptFilePattern.test(url)
  *
  * Extension is extracted with string scans instead of constructing a URL
  * since this runs for every resolved file path.
+ * @param fileUrl The file URL to check.
+ * @returns 'module' if the file URL has a known module extension, otherwise undefined.
  */
 export const getFormatFromFileUrl = (fileUrl: string) => {
 	// Find end of pathname (before query/hash)
