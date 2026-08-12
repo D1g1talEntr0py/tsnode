@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
  * via path.isAbsolute()
  *
  * Windows paths cannot be correctly parsed (e.g. new URL('C:\Users\Example\file.txt')
+ * @param url The URL to get the scheme from
+ * @returns The scheme of the URL, or undefined if the URL is not valid
  */
 const getScheme = (url: string) => {
 	const schemeIndex = url.indexOf(':');

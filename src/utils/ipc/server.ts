@@ -8,7 +8,7 @@ type OnMessage = (message: Buffer) => void;
 const bufferData = (onMessage: OnMessage) => {
 	let buffer = Buffer.alloc(0);
 	return (data: Buffer) => {
-		buffer = Buffer.concat([buffer, data]);
+		buffer = Buffer.concat([ buffer, data ]);
 
 		while (buffer.length > 4) {
 			const messageLength = buffer.readInt32BE(0);
@@ -19,7 +19,7 @@ const bufferData = (onMessage: OnMessage) => {
 				break;
 			}
 		}
-	}
+	};
 };
 
 export const createIpcServer = async () => {
@@ -68,7 +68,7 @@ export const createIpcServer = async () => {
 		 * sockets, Windows will close and remove the pipe when the owning process exits.
 		 */
 		if (!isWindows) {
-			try { rmSync(pipePath) } catch {}
+			try { rmSync(pipePath) } catch { /* ignore */ }
 		}
 	});
 

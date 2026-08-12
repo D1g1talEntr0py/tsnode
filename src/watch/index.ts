@@ -40,7 +40,12 @@ const printWatchHelp = () => {
 
 const normalizePath = (filePath: string) => filePath.replace(/\\/g, '/');
 
-/** `path.matchesGlob` throws on malformed patterns; treat those as non-matching. */
+/**
+ * `path.matchesGlob` throws on malformed patterns; treat those as non-matching.
+ * @param filePath The file path to test.
+ * @param pattern The glob pattern to test against.
+ * @returns True if the file path matches the glob pattern, false otherwise.
+ */
 const safeMatchesGlob = (filePath: string, pattern: string) => {
 	try { return matchesGlob(filePath, pattern) } catch { return false }
 };

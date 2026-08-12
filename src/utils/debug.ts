@@ -32,7 +32,7 @@ export const formatDebugValue = (value: unknown): string => {
 		const serialized = JSON.stringify(value, replacer, 2);
 
 		if (serialized !== undefined) { return serialized }
-	} catch {}
+	} catch { /* ignore */ }
 
 	return String(value);
 };

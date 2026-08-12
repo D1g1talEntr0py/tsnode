@@ -1,7 +1,7 @@
 import { enableCompileCache } from 'node:module';
 
 if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
-	try { enableCompileCache() } catch {}
+	try { enableCompileCache() } catch { /* ignored */ }
 }
 
 await import('./suppress-warnings');
