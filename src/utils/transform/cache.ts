@@ -73,6 +73,10 @@ export const forEachConcurrent = async <T>(values: T[], concurrency: number, tas
 	await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
 };
 
+/**
+ * A file-based cache that also keeps entries in memory for fast access.
+ * Implements the `Cache<T>` interface.
+ */
 class FileCache<T> implements Cache<T> {
 	#memoryCache = new Map<string, T>();
 	/**
@@ -104,14 +108,35 @@ class FileCache<T> implements Cache<T> {
 	#cacheDirectoryExists: boolean | undefined;
 	#maintenanceScheduled = false;
 
+	/**
+	 * Returns the cached value for the given key, or undefined if the key is not in the cache.
+	 * If the key is not in the memory cache, it will attempt to read it from disk.
+	 * If the key is found on disk, it will be loaded into memory and returned.
+	 * @param key The key to look up in the cache.
+	 * @returns The cached value, or undefined if the key is not in the cache.
+	 */
 	get(key: string) {
 		return this.#getLocal(key) ?? this.#acceptDiskHit(key, this.#readDiskEntry(key));
 	}
 
+	/**
+	 * Returns the cached value for the given key, or undefined if the key is not in the cache.
+	 * If the key is not in the memory cache, it will attempt to read it from disk asynchronously.
+	 * If the key is found on disk, it will be loaded into memory and returned.
+	 * @param key The key to look up in the cache.
+	 * @returns A promise that resolves to the cached value, or undefined if the key is not in the cache.
+	 */
 	async getAsync(key: string) {
 		return this.#getLocal(key) ?? this.#acceptDiskHit(key, await this.#readDiskEntryAsync(key));
 	}
 
+	/**
+	 * Sets the cached value for the given key. If the cache exceeds the maximum number of entries, the oldest entry will be removed.
+	 * If the cache is not disabled, the value will also be written to disk asynchronously.
+	 * @param key The key to set in the cache.
+	 * @param value The value to set in the cache.
+	 * @returns The cache instance (for chaining).
+	 */
 	set(key: string, value: T) {
 		this.#setMemory(key, value);
 
@@ -127,10 +152,16 @@ class FileCache<T> implements Cache<T> {
 		return this;
 	}
 
+	/**
+	 * Returns true if the cache contains the given key, either in memory or on disk.
+	 * @param key The key to check in the cache.
+	 * @returns True if the cache contains the key, false otherwise.
+	 */
 	has(key: string) {
 		return this.#memoryCache.has(key) || this.#pendingWrites.has(key);
 	}
 
+	/** Clears the cache, both in memory and pending disk writes. */
 	clear() {
 		this.#memoryCache.clear();
 		this.#pendingWrites.clear();
@@ -139,6 +170,7 @@ class FileCache<T> implements Cache<T> {
 	/**
 	 * Returns true at most once per `minSweepIntervalMs`. The marker is written
 	 * before sweeping so concurrent processes don't all sweep at once.
+	 * @returns True if the sweep was claimed, false if it was already claimed by another process.
 	 */
 	async #claimSweep() {
 		const markerPath = path.join(this.#cacheDirectory, sweepMarkerName);
@@ -160,6 +192,10 @@ class FileCache<T> implements Cache<T> {
 		return true;
 	}
 
+	/**
+	 * Schedules a maintenance sweep of the cache directory, if one is not already scheduled. The sweep will remove expired entries and old cache directories.
+	 * This is a best-effort operation; failures are ignored and the sweep will be retried on the next disk hit.
+	 */
 	#scheduleMaintenance() {
 		if (this.#maintenanceScheduled) { return }
 
@@ -167,20 +203,31 @@ class FileCache<T> implements Cache<T> {
 		// Detached from any await chain, so failures must not escape as an
 		// unhandled rejection. Maintenance is best-effort; it stays "scheduled"
 		// on failure so a broken cache directory isn't retried every disk hit.
-		setImmediate(async () => {
-			try {
-				if (!await this.#claimSweep()) { return }
+		setImmediate(() => {
+			void (async () => {
+				try {
+					if (!await this.#claimSweep()) { return }
 
-				await this.#expireDiskCache();
-				await this.#removeOldCacheDirectories();
-			} catch {}
+					await this.#expireDiskCache();
+					await this.#removeOldCacheDirectories();
+				} catch { /* ignored */ }
+			})();
 		});
 	}
 
+	/**
+	 * Returns the file path for the given cache key. The file path is based on the cache directory and the key.
+	 * @param key The cache key to get the file path for.
+	 * @returns The file path for the given cache key.
+	 */
 	#cacheFilePath(key: string) {
 		return path.join(this.#cacheDirectory, key);
 	}
 
+	/**
+	 * Ensures that the cache directory exists. If it does not exist, it will be created.
+	 * @returns A promise that resolves when the cache directory is ready.
+	 */
 	#ensureCacheDirectory() {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
 			this.#cacheDirectoryReadyPath = this.#cacheDirectory;
@@ -193,6 +240,10 @@ class FileCache<T> implements Cache<T> {
 		return this.#cacheDirectoryReady!;
 	}
 
+	/**
+	 * Ensures that the cache directory exists synchronously. If it does not exist, it will be created.
+	 * This is used for synchronous operations that need to ensure the cache directory exists before proceeding.
+	 */
 	#ensureCacheDirectorySync() {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
 			mkdirSync(this.#cacheDirectory, { recursive: true });
@@ -204,12 +255,21 @@ class FileCache<T> implements Cache<T> {
 		this.#cacheDirectoryExists = true;
 	}
 
+	/**
+	 * Returns true if the cache directory exists and is readable. If the cache directory does not exist, it will be created.
+	 * @returns True if the cache directory exists and is readable, false otherwise.
+	 */
 	#canReadDisk() {
 		if (this.#cacheDirectoryExists) { return true }
 
 		return existsSync(this.#cacheDirectory) ? (this.#cacheDirectoryExists = true) : false;
 	}
 
+	/**
+	 * Sets the cached value for the given key in memory. If the cache exceeds the maximum number of entries, the oldest entry will be removed.
+	 * @param key The key to set in the cache.
+	 * @param value The value to set in the cache.
+	 */
 	#setMemory(key: string, value: T) {
 		if (!this.#memoryCache.has(key) && this.#memoryCache.size >= maxMemoryCacheEntries) {
 			const oldestKey = this.#memoryCache.keys().next().value;
@@ -219,7 +279,11 @@ class FileCache<T> implements Cache<T> {
 		this.#memoryCache.set(key, value);
 	}
 
-	/** Shared by `get`/`getAsync`: memory, then not-yet-flushed writes. */
+	/**
+	 * Shared by `get`/`getAsync`: memory, then not-yet-flushed writes.
+	 * @param key The key to retrieve from the cache.
+	 * @returns The cached value if found, otherwise undefined.
+	 */
 	#getLocal(key: string) {
 		const memoryCacheHit = this.#memoryCache.get(key);
 		if (memoryCacheHit) { return memoryCacheHit }
@@ -235,6 +299,12 @@ class FileCache<T> implements Cache<T> {
 		return undefined;
 	}
 
+	/**
+	 * Loads a disk hit into memory and schedules maintenance. Returns the cached value if found, otherwise undefined.
+	 * @param key The key to retrieve from the cache.
+	 * @param cachedResult The cached value retrieved from disk.
+	 * @returns The cached value if found, otherwise undefined.
+	 */
 	#acceptDiskHit(key: string, cachedResult: T | undefined) {
 		if (!cachedResult) { return undefined }
 
@@ -246,11 +316,13 @@ class FileCache<T> implements Cache<T> {
 	}
 
 	/**
-	 * Reads and parses one entry.
+	 * Reads and parses one entry from disk.
 	 *
 	 * A missing file is an ordinary miss, not corruption. Unlinking on every miss
 	 * cost a wasted syscall per module on cold runs (~4.4ms for 300 modules in a
 	 * CPU profile), so only entries that exist but cannot be read are removed.
+	 * @param key The key to retrieve from the cache.
+	 * @returns The cached value if found, otherwise undefined.
 	 */
 	#readDiskEntry(key: string) {
 		if (!this.#canReadDisk()) { return undefined }
@@ -268,6 +340,11 @@ class FileCache<T> implements Cache<T> {
 		}
 	}
 
+	/**
+	 * Reads and parses one entry from disk asynchronously.
+	 * @param key The key to retrieve from the cache.
+	 * @returns The cached value if found, otherwise undefined.
+	 */
 	async #readDiskEntryAsync(key: string) {
 		if (!this.#canReadDisk()) { return undefined }
 
@@ -284,6 +361,7 @@ class FileCache<T> implements Cache<T> {
 		}
 	}
 
+	/** Schedules a flush of pending writes to disk. If a flush is already scheduled, this does nothing. */
 	#scheduleFlush() {
 		this.#ensureFlushOnExit();
 
@@ -292,10 +370,11 @@ class FileCache<T> implements Cache<T> {
 		this.#flushScheduled = true;
 		setImmediate(() => {
 			this.#flushScheduled = false;
-			this.#flushPendingWrites();
+			void this.#flushPendingWrites();
 		});
 	}
 
+	/** Ensures that a flush of pending writes is registered to occur on process exit. If already registered, this does nothing. */
 	#ensureFlushOnExit() {
 		if (this.#exitHookRegistered) { return }
 
@@ -309,7 +388,7 @@ class FileCache<T> implements Cache<T> {
 	 *
 	 * Writes are synchronous by design. The deferral to `setImmediate` is what
 	 * keeps them out of the (synchronous) load hook; making the writes
-	 * themselves async only added libuv threadpool dispatch overhead, which
+	 * themselves async only added libuv thread pool dispatch overhead, which
 	 * measured ~17ms for 100 small files versus ~1.2ms synchronously, and kept
 	 * the event loop open until it drained.
 	 */
@@ -317,7 +396,7 @@ class FileCache<T> implements Cache<T> {
 		this.#flushPendingWritesSync();
 
 		// Deliberately no sweep here: entries written moments ago are the freshest
-		// in the cache, and statting them all cost ~10ms per cold run. Maintenance
+		// in the cache, and getting them all cost ~10ms per cold run. Maintenance
 		// is driven by disk hits instead, where stale entries actually accumulate.
 		return Promise.resolve();
 	}
@@ -336,9 +415,7 @@ class FileCache<T> implements Cache<T> {
 		}
 
 		for (const [ key, value ] of queued) {
-			try {
-				writeFileSync(this.#cacheFilePath(key), JSON.stringify(value));
-			} catch {}
+			try { writeFileSync(this.#cacheFilePath(key), JSON.stringify(value)) } catch { /* ignored */ }
 		}
 	}
 
@@ -359,15 +436,24 @@ class FileCache<T> implements Cache<T> {
 			const filePath = path.join(this.#cacheDirectory, fileName);
 			try {
 				if ((await stat(filePath)).mtimeMs < expiredBefore) { await unlink(filePath) }
-			} catch {}
+			} catch { /* ignored */ }
 		});
 	}
 
+	/**
+	 * Removes a cache directory and all its contents. Used to clean up superseded cache directories.
+	 * @param directory The cache directory to remove.
+	 * @returns A promise that resolves when the cache directory is removed.
+	 */
 	async #cacheRemover(directory: string) {
 		return rm(directory, { recursive: true, force: true }).catch(noop);
 	}
 
 
+	/**
+	 * Removes superseded cache directories. This is a best-effort operation; failures are ignored and the directories will be retried on the next maintenance sweep.
+	 * @returns A promise that resolves when the old cache directories are removed.
+	 */
 	async #removeOldCacheDirectories() {
 		await Promise.all(this.#oldCacheDirectories.map(this.#cacheRemover));
 	}
