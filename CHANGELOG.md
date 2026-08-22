@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.0...v1.3.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **release:** simplify semantic-release config and publish flow ([c6d0ed2](https://github.com/D1g1talEntr0py/tsnode/commit/c6d0ed24e84bcf50a230255c066217a9493230ca))
+
 ## [1.3.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.2.0...v1.3.0) (2026-08-12)
 * **cli:** add in-process support for --print eval mode (901943ef73e3a9188737276d49f8f9043c5931af)
 - Introduces runPrintInProcess to mirror node --print completion-value output for transpiled TypeScript
