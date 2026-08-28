@@ -5,29 +5,102 @@ import { isWindows, getPipePath } from './get-pipe-path';
 
 type OnMessage = (message: Buffer) => void;
 
-const bufferData = (onMessage: OnMessage) => {
-	let buffer = Buffer.alloc(0);
-	return (data: Buffer) => {
-		buffer = Buffer.concat([ buffer, data ]);
+const maxMessageLength = 10 * 1024 * 1024;
 
-		while (buffer.length > 4) {
-			const messageLength = buffer.readInt32BE(0);
-			if (buffer.length >= 4 + messageLength) {
-				onMessage(buffer.subarray(4, 4 + messageLength));
-				buffer = buffer.subarray(4 + messageLength);
+/**
+ * Buffers incoming data and emits complete messages to the provided callback.
+ * Each message is prefixed with a 4-byte big-endian integer indicating the length of the message.
+ * @param onMessage Callback invoked with each complete message.
+ * @param onInvalidLength Callback invoked when an invalid message length is encountered.
+ */
+const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
+	const chunks: Buffer[] = [];
+	let totalLength = 0;
+
+	/**
+	 * Consume the specified number of bytes from the buffered chunks.
+	 * @param length The number of bytes to consume from the buffer.
+	 */
+	const consume = (length: number) => {
+		let remaining = length;
+		while (remaining > 0) {
+			const chunk = chunks[0];
+			if (!chunk) { break }
+
+			if (chunk.length <= remaining) {
+				chunks.shift();
+				remaining -= chunk.length;
+				totalLength -= chunk.length;
 			} else {
-				break;
+				chunks[0] = chunk.subarray(remaining);
+				totalLength -= remaining;
+				remaining = 0;
 			}
+		}
+	};
+
+	/**
+	 * Read the length of the next message from the buffered chunks.
+	 * This function assumes that there are at least 4 bytes available in the buffer.
+	 * @returns The length of the next message as a 32-bit big-endian integer.
+	 */
+	const readLength = () => {
+		const prefix = Buffer.alloc(4);
+		let written = 0;
+		for (const chunk of chunks) {
+			const bytesToCopy = Math.min(4 - written, chunk.length);
+			chunk.copy(prefix, written, 0, bytesToCopy);
+			written += bytesToCopy;
+			if (written === 4) { break }
+		}
+
+		return prefix.readInt32BE(0);
+	};
+
+	return (data: Buffer) => {
+		chunks.push(data);
+		totalLength += data.length;
+
+		while (totalLength >= 4) {
+			const messageLength = readLength();
+			if (messageLength < 0 || messageLength > maxMessageLength) {
+				onInvalidLength();
+				return;
+			}
+
+			if (totalLength < 4 + messageLength) { break }
+
+			consume(4);
+			const message = Buffer.allocUnsafe(messageLength);
+			let offset = 0;
+			while (offset < messageLength) {
+				const chunk = chunks[0];
+				if (!chunk) { break }
+
+				const bytesToCopy = Math.min(chunk.length, messageLength - offset);
+				chunk.copy(message, offset, 0, bytesToCopy);
+
+				if (bytesToCopy === chunk.length) {
+					chunks.shift();
+					totalLength -= chunk.length;
+				} else {
+					chunks[0] = chunk.subarray(bytesToCopy);
+					totalLength -= bytesToCopy;
+				}
+				offset += bytesToCopy;
+			}
+			onMessage(message);
 		}
 	};
 };
 
-export const createIpcServer = async () => {
+export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 	const server = createServer((socket) => {
-		socket.on('data', bufferData((message: Buffer) => server.emit('data', JSON.parse(message.toString()))));
+		socket.on('data', bufferData((message: Buffer) => {
+			try { server.emit('data', JSON.parse(message.toString())) } catch { /* Ignore malformed frames and keep the connection available for later messages. */ }
+		}, () => socket.destroy()));
 	});
 
-	const pipePath = getPipePath(process.pid);
 	// Sync: the child cannot be spawned until the socket is listening, so each
 	// async fs round trip here is pure added latency on the CLI critical path.
 	mkdirSync(tmpdir, { recursive: true });

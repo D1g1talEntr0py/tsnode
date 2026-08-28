@@ -185,7 +185,6 @@ await fsPromises.rm(temporaryDeclarationDirectory, { recursive: true, force: tru
 
 try {
 	run([
-		'-s',
 		'tsc',
 		'--ignoreConfig',
 		'--declaration',

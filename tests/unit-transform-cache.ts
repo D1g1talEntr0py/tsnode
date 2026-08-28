@@ -1,12 +1,23 @@
 import fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('node:fs/promises')>();
+	return {
+		...actual,
+		chmod: vi.fn(actual.chmod.bind(actual)),
+	};
+});
+
 import cache, { forEachConcurrent } from '../src/utils/transform/cache';
 import { tmpdir } from '../src/utils/temporary-directory';
 
 const cacheDirectory = tmpdir;
 const markerPath = path.join(cacheDirectory, '.last-sweep');
+const isPosix = process.platform !== 'win32';
 
 const nextTurn = () => new Promise<void>(resolve => setImmediate(resolve));
 
@@ -70,6 +81,44 @@ describe('transform cache', () => {
 
 		expect(fs.existsSync(filePath)).toBe(true);
 		expect(fs.readFileSync(filePath, 'utf8')).toBe(JSON.stringify(value));
+		if (isPosix) {
+			expect(fs.statSync(cacheDirectory).mode & 0o777).toBe(0o700);
+			expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+		}
+	});
+
+	test('ignores chmod failures while creating the cache directory', async () => {
+		const key = `chmod-failure-${randomUUID()}`;
+		const value = { code: 'export const value = 1;' };
+		const filePath = trackPath(cacheFilePath(key));
+		const chmodMock = vi.mocked(fsPromises.chmod);
+		chmodMock.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EPERM' }));
+
+		cache.set(key, value);
+		await settle();
+
+		expect(fs.existsSync(filePath)).toBe(true);
+		expect(fs.readFileSync(filePath, 'utf8')).toBe(JSON.stringify(value));
+	});
+
+	test('ignores synchronous chmod failures while flushing cache entries', async () => {
+		const key = `chmod-sync-failure-${randomUUID()}`;
+		const value = { code: 'export const value = 1;' };
+		const filePath = trackPath(cacheFilePath(key));
+		const chmodSyncSpy = vi.spyOn(fs, 'chmodSync').mockImplementation(((target: fs.PathLike | number, mode?: number) => {
+			const fileName = String(target);
+			if (fileName === cacheDirectory || fileName === filePath) {
+				throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+			}
+			return undefined as never;
+		}) as typeof fs.chmodSync);
+
+		cache.set(key, value);
+		await settle();
+
+		expect(fs.existsSync(filePath)).toBe(true);
+		expect(fs.readFileSync(filePath, 'utf8')).toBe(JSON.stringify(value));
+		chmodSyncSpy.mockRestore();
 	});
 
 	test('serves queued entries before they are written', async () => {

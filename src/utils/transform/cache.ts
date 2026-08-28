@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { unlink, mkdir, readdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmod, unlink, mkdir, readdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
 import { Json, type JsonString } from '../json';
 import { tmpdir, legacyTmpdirs } from '../temporary-directory';
 import type { Transformed } from './index';
@@ -232,7 +232,16 @@ class FileCache<T> implements Cache<T> {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
 			this.#cacheDirectoryReadyPath = this.#cacheDirectory;
 			this.#cacheDirectoryExists = undefined;
-			this.#cacheDirectoryReady = mkdir(this.#cacheDirectory, { recursive: true }).then(noop);
+			this.#cacheDirectoryReady = mkdir(this.#cacheDirectory, { recursive: true, mode: 0o700 })
+				.then(async () => {
+					try {
+						await chmod(this.#cacheDirectory, 0o700);
+					} catch {
+						// Best-effort: a lock down failure should not break cache setup on
+						// filesystems or platforms that reject chmod for the temp dir.
+					}
+				})
+				.then(noop);
 		}
 
 		this.#cacheDirectoryExists = true;
@@ -246,13 +255,18 @@ class FileCache<T> implements Cache<T> {
 	 */
 	#ensureCacheDirectorySync() {
 		if (this.#cacheDirectoryReadyPath !== this.#cacheDirectory) {
-			mkdirSync(this.#cacheDirectory, { recursive: true });
+			mkdirSync(this.#cacheDirectory, { recursive: true, mode: 0o700 });
 			this.#cacheDirectoryReadyPath = this.#cacheDirectory;
 			this.#cacheDirectoryExists = true;
-			return;
+		} else {
+			this.#cacheDirectoryExists = true;
 		}
 
-		this.#cacheDirectoryExists = true;
+		try {
+			chmodSync(this.#cacheDirectory, 0o700);
+		} catch {
+			// Best-effort on platforms/filesystems that reject chmod for temp dirs.
+		}
 	}
 
 	/**
@@ -415,7 +429,11 @@ class FileCache<T> implements Cache<T> {
 		}
 
 		for (const [ key, value ] of queued) {
-			try { writeFileSync(this.#cacheFilePath(key), JSON.stringify(value)) } catch { /* ignored */ }
+			try {
+				const filePath = this.#cacheFilePath(key);
+				writeFileSync(filePath, JSON.stringify(value), { mode: 0o600 });
+				try { chmodSync(filePath, 0o600) } catch { /* Best-effort. A failed chmod should not discard an otherwise valid write. */ }
+			} catch { /* ignored */ }
 		}
 	}
 
