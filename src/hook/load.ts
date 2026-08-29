@@ -72,7 +72,10 @@ export const createLoadSync = (hookData: Data): LoadHookSync => {
 		const virtualSource = hookData.virtualSources?.get(url);
 		if (virtualSource !== undefined) { return { format: 'module', source: virtualSource, shortCircuit: true } }
 
-		parent.send?.({ type: 'dependency', path: notifyLoad(hookData, url) });
+		// Keep this outside the optional send call: inlining notifyLoad in `path`
+		// would skip local onImport callbacks whenever parent IPC is disabled.
+		const loadedUrl = notifyLoad(hookData, url);
+		parent.send?.({ type: 'dependency', path: loadedUrl });
 
 		const loaded = nextLoad(url, prepareJsonAttributes(url, context));
 

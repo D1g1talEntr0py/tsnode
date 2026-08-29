@@ -99,7 +99,7 @@ describe('load hook integration', () => {
 			const handle = register({ namespace: 'load-callback', tsconfig: false, onImport: url => loadedUrls.push(url) });
 			try { await import(${JSON.stringify(`${valueUrl}?tsnode-namespace=load-callback`)}); console.log(JSON.stringify(loadedUrls)); }
 			finally { handle.unregister(); }
-		`, fixture.path, { TSNODE_DEPENDENCY_REPORTING: '1' });
+		`, fixture.path);
 
 		expect(result).toEqual([pathToFileURL(`${fixture.path}/value.ts`).href]);
 	});

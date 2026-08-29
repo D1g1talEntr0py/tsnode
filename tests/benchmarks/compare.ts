@@ -258,10 +258,11 @@ console.log(JSON.stringify({ totalArea: totalArea.toFixed(2), color, dir, stats 
 // Setup: resolve tsx and create all fixtures
 // ---------------------------------------------------------------------------
 
+let fixtureCleanup: Array<() => Promise<void>> = [];
+
 try {
 	benchmarkTmpdir = mkdtempSync(path.join(os.tmpdir(), 'tsnode-benchmark-'));
 	process.stdout.write('Setting up benchmark environment…\n');
-	let fixtureCleanup: Array<() => Promise<void>> = [];
 
 await using installRoot = await createFixture();
 
@@ -297,6 +298,7 @@ for (const implementation of comparisonImplementations) {
 process.stdout.write('\n');
 
 const tsxImplementation = comparisonImplementations.find(implementation => implementation.name === 'tsx');
+const tsxEsmLoaderPath = tsxImplementation?.esmLoaderPath;
 
 // Build all fixtures once; they are reused across all benchmark iterations.
 // Mitata handles the iteration loop — we only need fixtures on disk.
@@ -351,7 +353,15 @@ const [
 		'main.js': baselineMjsContent,
 	}),
 ]);
-	fixtureCleanup = [ simpleFixture.rm, smallFixture.rm, mediumFixture.rm, coldMediumFixture.rm, largeFixture.rm, complexFixture.rm, baselineFixture.rm ];
+	fixtureCleanup = [
+		() => simpleFixture.rm(),
+		() => smallFixture.rm(),
+		() => mediumFixture.rm(),
+		() => coldMediumFixture.rm(),
+		() => largeFixture.rm(),
+		() => complexFixture.rm(),
+		() => baselineFixture.rm(),
+	];
 
 process.stdout.write('Fixtures ready. Warming caches…\n');
 
@@ -369,18 +379,18 @@ const warmupRuns: Promise<void>[] = [
 	spawnTsnodeImport(largeFixture.path),
 	spawnTsnodeImport(complexFixture.path),
 ];
-if (tsxImplementation?.esmLoaderPath) {
+if (tsxImplementation && tsxEsmLoaderPath) {
 	warmupRuns.push(
 		spawn([tsxImplementation.cliPath, 'main.ts'], simpleFixture.path),
 		spawn([tsxImplementation.cliPath, 'main.ts'], smallFixture.path),
 		spawn([tsxImplementation.cliPath, 'main.ts'], mediumFixture.path),
 		spawn([tsxImplementation.cliPath, 'main.ts'], largeFixture.path),
 		spawn([tsxImplementation.cliPath, 'main.ts'], complexFixture.path),
-		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], simpleFixture.path),
-		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], smallFixture.path),
-		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], mediumFixture.path),
-		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], largeFixture.path),
-		spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], complexFixture.path),
+		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], simpleFixture.path),
+		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], smallFixture.path),
+		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], mediumFixture.path),
+		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], largeFixture.path),
+		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], complexFixture.path),
 	);
 }
 for (const implementation of comparisonImplementations) {
@@ -427,9 +437,9 @@ group('Startup floor (single file)', () => {
 			await spawnTsnodeCli(simpleFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], simpleFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], simpleFixture.path);
 			});
 
 			bench('tsx', async () => {
@@ -456,9 +466,9 @@ group('Small project — 10 ESM modules', () => {
 			await spawnTsnodeCli(smallFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], smallFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], smallFixture.path);
 			});
 
 			bench('tsx', async () => {
@@ -485,9 +495,9 @@ group('Medium project — 100 ESM modules', () => {
 			await spawnTsnodeCli(mediumFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], mediumFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], mediumFixture.path);
 			});
 
 			bench('tsx', async () => {
@@ -514,9 +524,9 @@ group('Large project — 300 ESM modules', () => {
 			await spawnTsnodeCli(largeFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], largeFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], largeFixture.path);
 			});
 
 			bench('tsx', async () => {
@@ -541,9 +551,9 @@ group('Complex TypeScript (enums + namespaces — transpilation required)', () =
 			await spawnTsnodeCli(complexFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx', async () => {
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], complexFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], complexFixture.path);
 			});
 
 			bench('tsx', async () => {
@@ -572,10 +582,10 @@ group('Cold cache — medium project (100 modules, cache cleared each run)', () 
 			await spawnTsnodeCli(coldMediumFixture.path);
 		});
 
-		if (tsxImplementation?.esmLoaderPath) {
+		if (tsxImplementation && tsxEsmLoaderPath) {
 			bench('--import tsx (cold)', async () => {
 				await clearTransformCache();
-				await spawn(['--import', tsxImplementation.esmLoaderPath, 'main.ts'], coldMediumFixture.path);
+				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], coldMediumFixture.path);
 			});
 
 			bench('tsx (cold)', async () => {
@@ -624,10 +634,10 @@ group('CLI signal relay overhead (single file, fork path)', () => {
 // ---------------------------------------------------------------------------
 
 	// Parent-process measurement; meaningless for spawned children
-	await run({ format: 'mitata', filter: /.*/, throw: false, gc: false });
+	await run({ format: 'mitata', filter: /.*/, throw: false });
 } finally {
 	// Clean up all fixture directories regardless of benchmark outcome
-	await Promise.allSettled(fixtureCleanup.map(cleanup => cleanup()));
+	await Promise.allSettled(fixtureCleanup.map((cleanup) => Promise.resolve().then(cleanup)));
 
 	if (benchmarkTmpdir) {
 		rmSync(benchmarkTmpdir, { recursive: true, force: true });
