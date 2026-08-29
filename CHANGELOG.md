@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.1...v1.3.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* **release:** remove invalid '-s' argument from the build ([3d60f7e](https://github.com/D1g1talEntr0py/tsnode/commit/3d60f7e486a1614f85ff6efa94dda2a336511701))
+
 ## [1.3.1](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.0...v1.3.1) (2026-08-22)
 
 
