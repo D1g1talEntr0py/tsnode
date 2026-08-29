@@ -1,3 +1,10 @@
+## [1.3.3](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.2...v1.3.3) (2026-08-29)
+
+
+### Bug Fixes
+
+* **release:** got the commit order wrong in order for a new release to generate. ([b43a768](https://github.com/D1g1talEntr0py/tsnode/commit/b43a768daeb6ab3f8dd719f9d46c15e1b2fcb770))
+
 ## [1.3.2](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.1...v1.3.2) (2026-08-29)
 
 
