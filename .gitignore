@@ -11,6 +11,7 @@ node_modules
 
 # Coverage directory used by tools like istanbul
 tests/coverage
+tests/coverage-c8
 
 # Output of 'npm pack'
 *.tgz

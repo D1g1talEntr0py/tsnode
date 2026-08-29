@@ -33,4 +33,4 @@ jobs:
         if: matrix.node-version == 26
         uses: codecov/codecov-action@v7
         with:
-          files: tests/coverage/coverage-final.json
+          files: tests/coverage-c8/lcov.info

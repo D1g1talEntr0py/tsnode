@@ -8,6 +8,8 @@ export default defineConfig({
 		hookTimeout: 300_000,
 		coverage: {
 			reportsDirectory: 'tests/coverage',
+			include: ['src/**/*.ts'],
+			exclude: ['src/types.ts'],
 		},
 	},
 });
