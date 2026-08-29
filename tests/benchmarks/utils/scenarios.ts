@@ -1,5 +1,5 @@
 import type { FileTree } from 'fs-fixture';
-import { cliTestFlag, nativeTypeScript, type Version } from '../../../src/utils/node-features';
+import { cliTestFlag, nativeTypeScript, type Version } from '../../utils/node-features';
 import {
 	createTsconfigForTree,
 	esmTree,

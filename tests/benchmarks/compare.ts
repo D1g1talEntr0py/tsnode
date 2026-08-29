@@ -70,10 +70,10 @@ const comparisonTargets = ['tsx', 'ts-node', 'jiti', 'esrun'] as const;
  * cache directory would silently degrade the next real invocation on this
  * machine, and would also let unrelated projects' entries affect results.
  */
-const benchmarkTmpdir = mkdtempSync(path.join(os.tmpdir(), 'tsnode-benchmark-'));
+let benchmarkTmpdir: string | undefined;
 
 /** Applied to every spawn so runners resolve their cache inside the sandbox. */
-const isolatedCacheEnv = { TMPDIR: benchmarkTmpdir };
+const isolatedCacheEnv = () => benchmarkTmpdir ? { TMPDIR: benchmarkTmpdir } : {};
 
 /**
  * Clears the sandboxed transform caches.
@@ -86,6 +86,8 @@ const isolatedCacheEnv = { TMPDIR: benchmarkTmpdir };
 const preservedCacheDirectories = new Set([ 'node-compile-cache' ]);
 
 const clearTransformCache = () => {
+	if (!benchmarkTmpdir) { throw new Error('Benchmark temp directory is not initialized'); }
+
 	for (const entry of readdirSync(benchmarkTmpdir)) {
 		if (preservedCacheDirectories.has(entry)) { continue }
 
@@ -111,7 +113,7 @@ const spawn = (
 	// Keep this path lean so allocation noise doesn't look like tsnode/tsx child memory usage.
 	const childProcess = spawnProcess(nodePath, args, {
 		cwd,
-		env: { ...process.env, ...isolatedCacheEnv, ...env },
+		env: { ...process.env, ...isolatedCacheEnv(), ...env },
 		stdio: 'ignore',
 	});
 
@@ -256,7 +258,10 @@ console.log(JSON.stringify({ totalArea: totalArea.toFixed(2), color, dir, stats 
 // Setup: resolve tsx and create all fixtures
 // ---------------------------------------------------------------------------
 
-process.stdout.write('Setting up benchmark environment…\n');
+try {
+	benchmarkTmpdir = mkdtempSync(path.join(os.tmpdir(), 'tsnode-benchmark-'));
+	process.stdout.write('Setting up benchmark environment…\n');
+	let fixtureCleanup: Array<() => Promise<void>> = [];
 
 await using installRoot = await createFixture();
 
@@ -346,6 +351,7 @@ const [
 		'main.js': baselineMjsContent,
 	}),
 ]);
+	fixtureCleanup = [ simpleFixture.rm, smallFixture.rm, mediumFixture.rm, coldMediumFixture.rm, largeFixture.rm, complexFixture.rm, baselineFixture.rm ];
 
 process.stdout.write('Fixtures ready. Warming caches…\n');
 
@@ -617,12 +623,13 @@ group('CLI signal relay overhead (single file, fork path)', () => {
 // Run
 // ---------------------------------------------------------------------------
 
-try {
 	// Parent-process measurement; meaningless for spawned children
 	await run({ format: 'mitata', filter: /.*/, throw: false, gc: false });
 } finally {
 	// Clean up all fixture directories regardless of benchmark outcome
-	await Promise.allSettled([ simpleFixture.rm(), smallFixture.rm(), mediumFixture.rm(), coldMediumFixture.rm(), largeFixture.rm(), complexFixture.rm(), baselineFixture.rm() ]);
+	await Promise.allSettled(fixtureCleanup.map(cleanup => cleanup()));
 
-	rmSync(benchmarkTmpdir, { recursive: true, force: true });
+	if (benchmarkTmpdir) {
+		rmSync(benchmarkTmpdir, { recursive: true, force: true });
+	}
 }

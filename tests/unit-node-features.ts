@@ -12,7 +12,7 @@ import {
 	testRunnerGlob,
 	wasmModules,
 	type Version,
-} from '../src/utils/node-features';
+} from './utils/node-features';
 
 const version = (major: number, minor: number, patch: number): Version => [major, minor, patch];
 

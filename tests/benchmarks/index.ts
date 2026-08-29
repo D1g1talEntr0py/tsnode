@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createFixture } from 'fs-fixture';
-import { isFeatureSupported, type Version } from '../../src/utils/node-features';
+import { isFeatureSupported, type Version } from '../utils/node-features';
 import type { SpecifierStyle } from './utils/generate-fixture';
 import { scenarios, type Scenario } from './utils/scenarios';
 import { resolveComparison, type ComparisonImplementation } from './utils/resolve-tsx';

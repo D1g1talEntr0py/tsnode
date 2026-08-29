@@ -10,7 +10,7 @@ import {
 	testRunnerGlob,
 	wasmModules,
 	type Version,
-} from '../../src/utils/node-features';
+} from './node-features';
 
 export type NodeCapabilities = {
 	cli: {
