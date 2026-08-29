@@ -25,6 +25,7 @@ import {
 	isRelativePath,
 	nodeModulesPath,
 	requestAcceptsQuery,
+	resolveEntrypointPath,
 	tsExtensions,
 	tsExtensionsPattern,
 } from '../src/utils/path-utils';
@@ -82,6 +83,16 @@ describe('unit utilities', () => {
 				argv: ['--color', '--', '--name', 'value'],
 				expected: ['--', '--name', 'value'],
 			},
+			{
+				name: 'leaves an unknown flag and its following value in place',
+				argv: ['--unknown', 'value', 'input.ts'],
+				expected: ['--unknown', 'value', 'input.ts'],
+			},
+			{
+				name: 'does not remove flags after the argv terminator',
+				argv: ['--', '--color', '--name', 'value'],
+				expected: ['--', '--color', '--name', 'value'],
+			},
 		])('$name', ({ argv, expected }) => {
 			expect(removeArgvFlags(flagDefinitions, [...argv])).toEqual(expected);
 		});
@@ -125,6 +136,26 @@ describe('unit utilities', () => {
 	});
 
 	describe('path utilities', () => {
+		test('resolves real extension and index fallbacks', () => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-entrypoint-'));
+			const extensionlessRequest = path.join(directory, 'extensionless');
+			const directoryRequest = path.join(directory, 'directory');
+			const extensionlessFile = `${extensionlessRequest}.tsx`;
+			const indexFile = path.join(directoryRequest, 'index.jsx');
+
+			try {
+				fs.mkdirSync(directoryRequest);
+				fs.writeFileSync(extensionlessFile, 'export const value = 1;');
+				fs.writeFileSync(indexFile, 'export const value = 2;');
+
+				expect(resolveEntrypointPath(extensionlessRequest)).toBe(extensionlessFile);
+				expect(resolveEntrypointPath(directoryRequest)).toBe(indexFile);
+				expect(resolveEntrypointPath(path.join(directory, 'missing'))).toBeUndefined();
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+
 		test.each([
 			['./file.ts', true],
 			['../file.ts', true],
@@ -245,7 +276,13 @@ describe('unit utilities', () => {
 		});
 
 		test('returns undefined for missing files', () => {
-			expect(readJsonFileSync(path.join(os.tmpdir(), 'missing-tsnode-file.json'))).toBeUndefined();
+			const filePath = path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`);
+			expect(readJsonFileSync(filePath)).toBeUndefined();
+		});
+
+		test('returns undefined for missing files asynchronously', async () => {
+			const filePath = path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`);
+			expect(await readJsonFile(filePath)).toBeUndefined();
 		});
 
 		test('returns undefined for invalid JSON', () => {
@@ -255,6 +292,18 @@ describe('unit utilities', () => {
 
 			try {
 				expect(readJsonFileSync(filePath)).toBeUndefined();
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+
+		test('returns undefined for invalid JSON asynchronously', async () => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
+			const filePath = path.join(directory, 'broken.json');
+			fs.writeFileSync(filePath, '{"name": "tsnode", }');
+
+			try {
+				expect(await readJsonFile(filePath)).toBeUndefined();
 			} finally {
 				fs.rmSync(directory, { recursive: true, force: true });
 			}

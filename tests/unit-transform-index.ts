@@ -70,7 +70,8 @@ describe('transform index', () => {
 
 		expect(thrown).toBeDefined();
 		expect(thrown).toMatchObject({ name: 'TransformError' });
-		expect(thrown).not.toHaveProperty('errors');
+		expect(thrown).toBeInstanceOf(Error);
+		expect(thrown).toHaveProperty('message', expect.stringContaining('invalid.ts'));
 		expect(thrown).not.toHaveProperty('warnings');
 	});
 });

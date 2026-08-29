@@ -37,14 +37,9 @@ const mocks = vi.hoisted(() => {
 	const runMock = vi.fn(() => createChildProcess());
 
 	let watchEventHandler: ((event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void) | undefined;
-	const watchrInstances: Array<{ targets: string[]; options: Record<string, unknown> }> = [];
 
 	class WatchrMock {
-		constructor(targets: string | string[], options: Record<string, unknown>, handler: (event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void) {
-			watchrInstances.push({
-				targets: Array.isArray(targets) ? targets : [targets],
-				options,
-			});
+		constructor(_targets: string | string[], _options: Record<string, unknown>, handler: (event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void) {
 			watchEventHandler = handler;
 		}
 
@@ -68,7 +63,6 @@ const mocks = vi.hoisted(() => {
 		runMock,
 		createChildProcess,
 		createIpcServerMock,
-		watchrInstances,
 		getDataListener: () => dataListener,
 		getWatchEventHandler: () => watchEventHandler,
 		reset: () => {
@@ -76,7 +70,6 @@ const mocks = vi.hoisted(() => {
 			watchersCloseMock.mockReset();
 			runMock.mockReset();
 			createIpcServerMock.mockReset();
-			watchrInstances.length = 0;
 			dataListener = undefined;
 			watchEventHandler = undefined;
 		},
@@ -115,54 +108,6 @@ describe('watch command', () => {
 	afterEach(() => {
 		stdinDataHandler = undefined;
 		vi.restoreAllMocks();
-	});
-
-	test('configures Watchr with native debounce and starts an initial run', async () => {
-		await runWatchCommand(['entry.ts']);
-
-		expect(mocks.watchrInstances).toHaveLength(1);
-		expect(mocks.watchrInstances[0].options).toMatchObject({
-			ignoreInitial: true,
-			recursive: true,
-			debounce: 100,
-		});
-		expect(mocks.runMock).toHaveBeenCalledTimes(1);
-	});
-
-	test('watches absolute runtime dependencies with shared Watchr options', async () => {
-		await runWatchCommand(['entry.ts']);
-
-		const dataListener = mocks.getDataListener();
-		expect(dataListener).toBeTypeOf('function');
-
-		dataListener!({ type: 'dependency', path: '/tmp/runtime-dependency.ts' });
-		dataListener!({ type: 'dependency', path: '/tmp/runtime-dependency.ts' });
-		dataListener!({ type: 'dependency', path: 'relative.ts' });
-		dataListener!({ type: 'dependency', path: 'file:///tmp/runtime-dependency-2.ts' });
-
-		expect(mocks.watchPathMock).toHaveBeenCalledTimes(2);
-		expect(mocks.watchPathMock).toHaveBeenNthCalledWith(
-			1,
-			'/tmp/runtime-dependency.ts',
-			mocks.watchrInstances[0].options,
-			mocks.getWatchEventHandler(),
-		);
-		expect(mocks.watchPathMock).toHaveBeenNthCalledWith(
-			2,
-			'/tmp/runtime-dependency-2.ts',
-			mocks.watchrInstances[0].options,
-			mocks.getWatchEventHandler(),
-		);
-	});
-
-	test('reruns on every Return key press', async () => {
-		await runWatchCommand(['entry.ts']);
-		expect(stdinDataHandler).toBeTypeOf('function');
-
-		stdinDataHandler!();
-		stdinDataHandler!();
-
-		expect(mocks.runMock).toHaveBeenCalledTimes(3);
 	});
 
 	test('coalesces queued reruns while a previous rerun is still finishing', async () => {

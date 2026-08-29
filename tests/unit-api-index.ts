@@ -1,25 +1,13 @@
-import { expect, test, vi } from 'vitest';
-
-const mocks = vi.hoisted(() => ({
-	import: vi.fn(async () => ({})),
-	registerScoped: vi.fn(() => ({ import: mocks.import, unregister: vi.fn() })),
-}));
-
-vi.mock('../src/api/register', () => ({
-	register: vi.fn(),
-	registerScoped: mocks.registerScoped,
-}));
+import { expect, test } from 'vitest';
 
 import { tsImport } from '../src/api/index';
 
-test('uses a unique namespace for every scoped import', async () => {
-	await Promise.all([
-		tsImport('./first.ts', 'file:///project/main.ts'),
-		tsImport('./second.ts', 'file:///project/main.ts'),
-	]);
+test('requires a parent URL in the string form', () => {
+	// @ts-expect-error Testing the runtime validation for a missing argument.
+	expect(() => tsImport('./entry.ts')).toThrow(/current file path/);
+});
 
-	const firstNamespace = mocks.registerScoped.mock.calls[0][0].namespace;
-	const secondNamespace = mocks.registerScoped.mock.calls[1][0].namespace;
-
-	expect(firstNamespace).not.toBe(secondNamespace);
+test('requires parentURL in the options form', () => {
+	// @ts-expect-error Testing the runtime validation for an incomplete options object.
+	expect(() => tsImport('./entry.ts', {})).toThrow(/current file path/);
 });

@@ -14,14 +14,10 @@ describe('benchmark scenarios', () => {
 		expect(result.loadMs).toBe(7);
 		expect(result.evalMs).toBe(2);
 	});
-	test('every scenario has required fields', () => {
+	test('every scenario builds its declared entry file', () => {
 		for (const scenario of scenarios) {
-			expect(typeof scenario.name, `${scenario.name}: name`).toBe('string');
-			expect(typeof scenario.description, `${scenario.name}: description`).toBe('string');
-			expect(typeof scenario.entry, `${scenario.name}: entry`).toBe('string');
-			expect(typeof scenario.build, `${scenario.name}: build`).toBe('function');
-			expect(typeof scenario.default, `${scenario.name}: default`).toBe('boolean');
-			expect(['tsx', 'node'], `${scenario.name}: runner`).toContain(scenario.runner);
+			const tree = scenario.build(3, 'ts');
+			expect(tree[scenario.entry], `${scenario.name}: missing ${scenario.entry}`).toBeDefined();
 		}
 	});
 
@@ -30,15 +26,12 @@ describe('benchmark scenarios', () => {
 		expect(new Set(names).size).toBe(names.length);
 	});
 
-	test('at least one scenario is in the default set', () => {
-		expect(scenarios.some(s => s.default)).toBe(true);
-	});
-
-	test('build() returns a non-empty file tree', () => {
-		for (const scenario of scenarios) {
-			const tree = scenario.build(1, 'ts');
-			expect(typeof tree, `${scenario.name}: build() result`).toBe('object');
-			expect(Object.keys(tree).length, `${scenario.name}: build() returned empty tree`).toBeGreaterThan(0);
-		}
+	test('default scenarios cover the intended benchmark floors', () => {
+		expect(scenarios.filter(scenario => scenario.default).map(scenario => scenario.name)).toEqual([
+			'node-baseline',
+			'hooks-passthrough',
+			'esm-ts',
+			'native-ts',
+		]);
 	});
 });

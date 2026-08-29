@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 const { spawnMock } = vi.hoisted(() => ({
@@ -79,5 +80,30 @@ describe('run', () => {
 		expect(spawnedEnv().TSNODE_IPC).toBeUndefined();
 		expect(hasPreload('preflight')).toBe(false);
 		expect(hasPreload('loader')).toBe(true);
+	});
+
+	test('adds an IPC channel when run is called from a spawned process with IPC', async () => {
+		const sourceResolveHookPath = path.resolve('tests/utils/source-resolve-hook.ts');
+		const driver = `
+			const { run } = await import(${JSON.stringify(path.resolve('src/run.ts'))});
+			const child = run(['-e', 'process.send?.("child-message")'], { signalRelay: false });
+			child.on('message', message => process.send?.(message));
+			child.on('close', code => process.exit(code ?? 1));
+		`;
+		const realSpawn = process.getBuiltinModule('node:child_process')!.spawn;
+		const childProcess = realSpawn(process.execPath, [
+			'--experimental-strip-types', '--import', sourceResolveHookPath,			'--input-type=module', '-e', driver,
+		], {
+			env: { ...process.env, NODE_OPTIONS: `--experimental-strip-types --import ${sourceResolveHookPath}` },
+			stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+		});
+		let message: unknown;
+		let stderr = '';
+		childProcess.stderr!.setEncoding('utf8');
+		childProcess.stderr!.on('data', (chunk: string) => { stderr += chunk; });
+		childProcess.on('message', value => { message = value; });
+
+		expect(await new Promise<number>((resolve) => childProcess.once('close', code => resolve(code ?? 1))), stderr).toBe(0);
+		expect(message).toBe('child-message');
 	});
 });

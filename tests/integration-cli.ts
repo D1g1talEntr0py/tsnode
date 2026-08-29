@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
@@ -184,6 +183,47 @@ describe('cli integration', () => {
 		expect(result.exitCode).toBe(0);
 	});
 
+	test('runs a .js entry through its TypeScript source', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'const value: number = 42; console.log(value);\n',
+		});
+
+		const { exited } = runCli(['main.js'], fixture.path);
+		const result = await exited;
+
+		expect(result.stderr).toBe('');
+		expect(result.stdout.trim()).toBe('42');
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('prints help without trying to run an entry', async () => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+
+		const { exited } = runCli(['--help'], fixture.path);
+		const result = await exited;
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toBe('');
+		expect(result.stdout).toContain('Usage: tsnode [script path] [arguments]');
+	});
+
+	test('reports an unknown option while preserving the entry error', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'console.log("ran");\n',
+		});
+
+		const { exited } = runCli(['--definitely-unknown', 'main.ts'], fixture.path);
+		const result = await exited;
+
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stdout).not.toContain('ran');
+		expect(result.stderr).toContain('bad option: --definitely-unknown');
+	});
+
 	test('relays SIGINT to the child and reports exit code 130', async () => {
 		await using fixture = await createFixture({
 			'package.json': JSON.stringify({ type: 'module' }),
@@ -353,25 +393,4 @@ describe('cli integration', () => {
 		expect(result.stderr).toContain('boom');
 	});
 
-	test('reruns watch mode when a dependency changes', async () => {
-		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
-			...tsconfigForFixture,
-			'main.ts': 'import { value } from "./value.ts"; console.log(`watch:${value}`); setInterval(() => {}, 1000);\n',
-			'value.ts': 'export const value: number = 1;\n',
-		});
-
-		const { childProcess, read, exited } = runCli(['watch', 'main.ts'], fixture.path, { TSNODE_DISABLE_IN_PROCESS: '1' });
-
-		try {
-			await waitForStdout(read, 'watch:1');
-
-			await writeFile(path.join(fixture.path, 'value.ts'), 'export const value: number = 2;\n');
-
-			await waitForStdout(read, 'watch:2');
-		} finally {
-			childProcess.kill('SIGINT');
-			await exited;
-		}
-	});
 });

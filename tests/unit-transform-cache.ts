@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { utimesSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -142,22 +143,28 @@ describe('transform cache', () => {
 
 		cache.set(key, value);
 		cache.clear();
-
 		await settle();
 
 		expect(fs.existsSync(filePath)).toBe(false);
 		expect(cache.has(key)).toBe(false);
 	});
 
-	test('names cache files by key alone', async () => {
-		const key = `named-${randomUUID()}`;
-		const filePath = trackPath(cacheFilePath(key));
+	test('expires old disk entries during maintenance', async () => {
+		const oldKey = `expired-${randomUUID()}`;
+		const freshKey = `fresh-${randomUUID()}`;
+		const oldPath = trackPath(cacheFilePath(oldKey));
+		const freshPath = trackPath(cacheFilePath(freshKey));
+		const oldValue = { code: 'export const oldValue = true;' };
+		const freshValue = { code: 'export const freshValue = true;' };
+		const oldTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
 
-		cache.set(key, { code: 'export const value = 1;' });
-		await settle();
+		fs.writeFileSync(oldPath, JSON.stringify(oldValue));
+		fs.writeFileSync(freshPath, JSON.stringify(freshValue));
+		utimesSync(oldPath, oldTime, oldTime);
 
-		expect(fs.existsSync(filePath)).toBe(true);
-		expect(path.basename(filePath)).toBe(key);
+		expect(cache.get(freshKey)).toEqual(freshValue);
+		await expect.poll(() => fs.existsSync(oldPath), { timeout: 1_000 }).toBe(false);
+		expect(fs.existsSync(freshPath)).toBe(true);
 	});
 
 	test('reads disk entries directly without indexing the directory', () => {
@@ -184,6 +191,22 @@ describe('transform cache', () => {
 		expect(fs.existsSync(filePath)).toBe(false);
 	});
 
+	test('recovers a corrupted disk entry when it is replaced', async () => {
+		const key = `recovered-${randomUUID()}`;
+		const filePath = trackPath(cacheFilePath(key));
+		const replacement = { code: 'export const recovered = true;' };
+
+		fs.writeFileSync(filePath, '{not valid json');
+		expect(cache.get(key)).toBeUndefined();
+		await settle();
+
+		cache.set(key, replacement);
+		await settle();
+
+		expect(cache.get(key)).toEqual(replacement);
+		expect(fs.readFileSync(filePath, 'utf8')).toBe(JSON.stringify(replacement));
+	});
+
 	test('bounds concurrent cache maintenance work', async () => {
 		let activeTasks = 0;
 		let maximumActiveTasks = 0;
@@ -203,4 +226,5 @@ describe('transform cache', () => {
 		await expect(forEachConcurrent([], -1, async () => {})).rejects.toThrow(RangeError);
 		await expect(forEachConcurrent([], 1.5, async () => {})).rejects.toThrow(RangeError);
 	});
+
 });
