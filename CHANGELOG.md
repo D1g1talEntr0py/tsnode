@@ -1,5 +1,8 @@
 ## [1.3.3](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.2...v1.3.3) (2026-08-29)
 
+### Changed
+
+* Update `pretty-ms` to 9.3.1; preserve local dependency notifications when parent IPC is unavailable; clean up benchmark fixtures and the integration-load environment. ([008935f](https://github.com/D1g1talEntr0py/tsnode/commit/008935fb56ebca622dd257b9dd9172e1bf5f91be))
 
 ### Bug Fixes
 

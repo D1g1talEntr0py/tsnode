@@ -24,6 +24,37 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
+      - name: Validate Conventional Commit message boundaries
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { execFileSync } = require('node:child_process');
+
+            const base = context.eventName === 'pull_request'
+              ? context.payload.pull_request.base.sha
+              : context.payload.before;
+            const head = context.eventName === 'pull_request'
+              ? context.payload.pull_request.head.sha
+              : context.sha;
+
+            if (/^0+$/.test(base)) {
+              core.info('Initial push; no preceding commit range to validate.');
+              return;
+            }
+
+            const messages = execFileSync('git', ['log', '--format=%B%x00', `${base}..${head}`], {
+              encoding: 'utf8',
+            }).split('\0').filter(Boolean);
+
+            for (const message of messages) {
+              const lines = message.replace(/\r\n/g, '\n').split('\n');
+              if (lines.length > 1 && lines[1] !== '') {
+                throw new Error(
+                  `Commit message has no blank line after its title: ${lines[0]}\n` +
+                  'Use one Conventional Commit title per commit. Separate an optional body with a blank line.',
+                );
+              }
+            }
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm type-check
