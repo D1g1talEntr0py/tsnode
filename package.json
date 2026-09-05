@@ -43,7 +43,7 @@
 		"./preflight": "./dist/preflight.js",
 		"./repl": "./dist/repl.js"
 	},
-	"packageManager": "pnpm@12.0.0",
+	"packageManager": "pnpm@12.3.4",
 	"scripts": {
 		"build": "pnpm type-check && node ./scripts/build/build-js.ts && node ./scripts/build/build-types.ts",
 		"run:import": "node --import ./dist/loader.js",
@@ -53,7 +53,7 @@
 		"benchmark:hooks": "pnpm build && node ./dist/cli.js tests/benchmarks/hooks.ts",
 		"benchmark:compare": "pnpm build && node ./dist/cli.js tests/benchmarks/compare.ts",
 		"benchmark:memory": "pnpm build && node ./dist/cli.js tests/benchmarks/memory-profile.ts",
-		"lint": "eslint --flag unstable_native_nodejs_ts_config ./src",
+		"lint": "eslint ./src",
 		"type-check": "tsc",
 		"test": "vitest run",
 		"test:coverage": "c8 --all --include=src/** --exclude=src/types.ts --exclude=tests/** --exclude=scripts/** --exclude-after-remap=false --reporter=text --reporter=lcov --reports-dir=tests/coverage-c8 vitest run",
@@ -69,18 +69,18 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@types/node": "^26.4.0",
+		"@types/node": "^26.4.1",
 		"@typescript/native": "npm:typescript@^7.0.2",
-		"@vitest/coverage-v8": "^4.1.11",
+		"@vitest/coverage-v8": "^5.0.0",
 		"c8": "^12.0.0",
 		"eslint": "^10.9.1",
-		"eslint-plugin-jsdoc": "^64.2.1",
+		"eslint-plugin-jsdoc": "^64.3.5",
 		"execa": "^10.0.1",
-		"fs-fixture": "^2.14.0",
+		"fs-fixture": "^2.16.0",
 		"get-node": "^15.0.4",
 		"mitata": "^1.0.34",
 		"typescript": "npm:@typescript/typescript6@^6.0.2",
-		"typescript-eslint": "^8.68.0",
-		"vitest": "^4.1.11"
+		"typescript-eslint": "^8.69.0",
+		"vitest": "^5.0.0"
 	}
 }
