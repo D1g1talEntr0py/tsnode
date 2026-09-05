@@ -1,3 +1,12 @@
+## [1.3.4](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.3...v1.3.4) (2026-09-05)
+
+
+### Bug Fixes
+
+* **ci:** parse commit message boundaries correctly ([e6d1f17](https://github.com/D1g1talEntr0py/tsnode/commit/e6d1f171fe3d24007df2aa8ca0d31731165f0241))
+* **ci:** restore the unstable_native_nodejs_ts_config flag ([f419d1b](https://github.com/D1g1talEntr0py/tsnode/commit/f419d1b90faf70a15ee0c279e3d5aa9a719e5dd5))
+* **cli:** preserve entrypoint semantics in fast path ([9b4e9d1](https://github.com/D1g1talEntr0py/tsnode/commit/9b4e9d193efcf0e2815ddc58c5d5ced8672ab769))
+
 ## [1.3.3](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.2...v1.3.3) (2026-08-29)
 
 ### Changed
