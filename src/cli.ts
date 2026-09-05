@@ -4,7 +4,7 @@ import type { Server } from 'node:net';
 import type { Flags } from './remove-argv-flags';
 import type { ParseArgsOptionsConfig } from 'node:util';
 import type { ChildProcess, Serializable } from 'node:child_process';
-import { normalizeFileUrlPath, resolveEntrypointPath } from './utils/path-utils';
+import { normalizeFileUrlPath, resolveEntrypointPath, entryUsesImportMetaMain } from './utils/path-utils';
 
 type RunInProcess = (code: string, scriptArgv: string[]) => Promise<void>;
 
@@ -92,6 +92,34 @@ const tsnodeFlags = {
 	noCache: { type: Boolean },
 	tsconfig: { type: String }
 } satisfies Flags;
+
+/**
+ * Leading flags with a documented, stable runtime-equivalent Node API, mapped to the env var
+ * `src/api/register.ts` already consults to apply that equivalent (e.g. `process.setSourceMapsEnabled(true)`).
+ * Only flags where the runtime API is a genuine, non-approximated equivalent belong here; anything requiring
+ * a real bootstrap (--inspect, --experimental-*, --conditions, --loader, --require, V8 flags, etc.) must keep forking.
+ */
+const RUNTIME_EQUIVALENT_FLAG_ENV = {
+	'--enable-source-maps': 'TSNODE_SOURCE_MAPS'
+} satisfies Record<string, string>;
+
+const extractRuntimeEquivalentLeadingFlags = (argv: string[]) => {
+	let index = 0;
+	while (index < argv.length && argv[index].startsWith('-')) {
+		if (argv[index] === '--') {
+			return index > 0 ? { flags: argv.slice(0, index), rest: argv.slice(index + 1) } : undefined;
+		}
+
+		if (!(argv[index] in RUNTIME_EQUIVALENT_FLAG_ENV)) { return undefined }
+		index += 1;
+	}
+
+	return index > 0 ? { flags: argv.slice(0, index), rest: argv.slice(index) } : undefined;
+};
+
+const applyRuntimeEquivalentFlags = (flags: string[]) => {
+	for (const flag of flags) { process.env[RUNTIME_EQUIVALENT_FLAG_ENV[flag as keyof typeof RUNTIME_EQUIVALENT_FLAG_ENV]] = '1' }
+};
 
 const topLevelFlags = {
 	...tsnodeFlags,
@@ -197,14 +225,22 @@ if (rawArgv[0] === 'watch') {
 	 * When none of that is needed the entry can run in this process and skip an entire Node bootstrap.
 	 *
 	 * Deliberately conservative: anything that needs real bootstrap flags, a separate process, or argv rewriting still forks.
+	 *
+	 * A narrow exception: leading flags with a documented, stable runtime-equivalent API (currently just
+	 * `--enable-source-maps`) are stripped into `candidateArgv` and applied via env var instead of forcing a fork,
+	 * but only once `canRunInProcess` confirms every other condition holds. The entry is normalized in the
+	 * canonical argv so both the in-process and fork paths receive the same entry representation.
 	 */
-	const [ firstRunArgument ] = argvFlagsToRun;
+	const runtimeEquivalentLeadingFlags = extractRuntimeEquivalentLeadingFlags(argvFlagsToRun);
+	const entryArgvIndex = (runtimeEquivalentLeadingFlags?.flags.length ?? 0) + (argvFlagsToRun[runtimeEquivalentLeadingFlags?.flags.length ?? 0] === '--' ? 1 : 0);
+	const firstRunArgument = argvFlagsToRun[entryArgvIndex];
 	const normalizedFirstRunArgument = firstRunArgument && !firstRunArgument.startsWith('-') ? normalizeFileUrlPath(firstRunArgument) : firstRunArgument;
 	const resolvedEntrypointPath = normalizedFirstRunArgument && !normalizedFirstRunArgument.startsWith('-') ? resolveEntrypointPath(normalizedFirstRunArgument) : undefined;
 
-	if (normalizedFirstRunArgument !== firstRunArgument && normalizedFirstRunArgument !== undefined) {
-		argvFlagsToRun[0] = normalizedFirstRunArgument;
-	}
+	if (normalizedFirstRunArgument !== firstRunArgument && normalizedFirstRunArgument !== undefined) { argvFlagsToRun[entryArgvIndex] = normalizedFirstRunArgument }
+
+	const candidateArgv = runtimeEquivalentLeadingFlags ? argvFlagsToRun.slice(entryArgvIndex) : argvFlagsToRun;
+	const startsWithDash = (argument: string) => argument.startsWith('-');
 
 	/**
 	 * The following conditions must be met to run in-process:
@@ -213,19 +249,24 @@ if (rawArgv[0] === 'watch') {
 	 * - No eval/print flags that rewrite argv into flags that must be set at bootstrap
 	 * - No test flag that rewrites argv into a glob that must be set at bootstrap
 	 * - A script path is provided (not REPL or stdin)
-	 * - The first argument is not a leading Node flag (e.g. --inspect, --experimental-*)
+	 * - The first argument is not a leading Node flag (e.g. --inspect, --experimental-*), unless it has a
+	 *   supported runtime equivalent, in which case it's already been stripped out of `candidateArgv` above
 	 * - The parent process does not expect to exchange IPC messages with a child
 	 * - The first argument is a plain file (not a directory or extension-less entry)
+	 * - The entry doesn't rely on `import.meta.main`, which is only ever true for
+	 *   the actual process entry point and can never be true for a dynamically
+	 *   imported module, so such entries must be forked to behave correctly
 	 */
-	const canRunInProcess = (process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && normalizedFirstRunArgument !== undefined && !normalizedFirstRunArgument.startsWith('-') && !process.send && resolvedEntrypointPath !== undefined);
-	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && (transformedEvalCode !== undefined || transformedPrintCode !== undefined) && !values.test && !process.send && !evalScriptArgv.some((argument) => argument.startsWith('-'));
+	const canRunInProcess = (process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && normalizedFirstRunArgument !== undefined && !normalizedFirstRunArgument.startsWith('-') && !process.send && resolvedEntrypointPath !== undefined && !entryUsesImportMetaMain(resolvedEntrypointPath));
+	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && (transformedEvalCode !== undefined || transformedPrintCode !== undefined) && !values.test && !process.send && !evalScriptArgv.some(startsWithDash);
 
 	if (canRunInProcess) {
 		// Consumed at module-init time by the cache and tsconfig loaders, so it must be set before the loader graph is imported.
 		if (values['no-cache']) { process.env['TSNODE_DISABLE_CACHE'] = '1' }
 		if (typeof values.tsconfig === 'string') { process.env['TSNODE_TSCONFIG_PATH'] = values.tsconfig }
+		if (runtimeEquivalentLeadingFlags) { applyRuntimeEquivalentFlags(runtimeEquivalentLeadingFlags.flags) }
 
-		await (await import('./run-in-process')).runInProcess(argvFlagsToRun, resolvedEntrypointPath);
+		await (await import('./run-in-process')).runInProcess(candidateArgv, resolvedEntrypointPath);
 	} else if (canRunEvalInProcess) {
 		const evalModule: { runEvalInProcess: RunInProcess, runPrintInProcess: RunInProcess } = await import('./run-eval-in-process');
 

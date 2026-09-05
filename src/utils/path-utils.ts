@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -21,14 +21,12 @@ export const isFilePath = (request: string) => (isRelativePath(request) || path.
 
 // In Node, bare specifiers (packages and core modules) do not accept queries
 export const requestAcceptsQuery = (request: string) => {
-	// ./foo.js?query
-	// /foo.js?query in UNIX
+	// ./foo.js?query | /foo.js?query in UNIX
 	if (isFilePath(request)) { return true }
 
 	const scheme = getScheme(request);
-	// Expected to be file, https, etc...
-	// node:url maps to a bare-specifier, which does not accept queries
-	// But URLs like file:// or https:// do
+	// Expected to be file, https, etc... | node:url maps to a bare-specifier,
+	// which does not accept queries. But URLs like file:// or https:// do
 	return (scheme && scheme !== 'node');
 };
 
@@ -72,6 +70,63 @@ export const resolveEntrypointPath = (request: string) => {
 	}
 
 	return undefined;
+};
+
+// Node only marks the actual process entry point module as import.meta.main; a dynamically `import()`-ed module
+// can never satisfy that, so entries relying on it must be forked instead of run through the in-process fast path.
+const importMetaMainPattern = /^import\s*\.\s*meta(?:\s*\.\s*main\b|\s*\[\s*(['"`])main\1\s*\])/;
+
+const hasImportMetaMain = (source: string) => {
+	let index = 0;
+	const length = source.length;
+
+	while (index < length) {
+		if (source[index] === '/' && source[index + 1] === '/') {
+			index = source.indexOf('\n', index + 2);
+
+			if (index === -1) { return false }
+
+			continue;
+		}
+
+		if (source[index] === '/' && source[index + 1] === '*') {
+			index = source.indexOf('*/', index + 2);
+
+			if (index === -1) { return false }
+
+			index += 2;
+
+			continue;
+		}
+
+		if (source[index] === '"' || source[index] === '\'' || source[index] === '`') {
+			const quote = source[index++];
+
+			while (index < length) {
+				if (source[index] === '\\') {
+					index += 2;
+				} else if (source[index++] === quote) {
+					break;
+				}
+			}
+
+			continue;
+		}
+
+		if (source.slice(index).match(importMetaMainPattern)) { return true }
+
+		index += 1;
+	}
+
+	return false;
+};
+
+export const entryUsesImportMetaMain = (entryPath: string) => {
+	try {
+		return hasImportMetaMain(readFileSync(entryPath, 'utf8'));
+	} catch {
+		return false;
+	}
 };
 
 export const tsExtensions = ['.ts', '.tsx', '.jsx'];

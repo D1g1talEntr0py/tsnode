@@ -71,6 +71,12 @@ const waitForStdout = (
 	poll();
 });
 
+const getSourceLocation = (frame: string) => {
+	const match = frame.match(/main\.ts:(\d+):(\d+)\)?$/);
+
+	return match ? { line: Number(match[1]), column: Number(match[2]) } : undefined;
+};
+
 describe('cli integration', () => {
 	test('runs a TypeScript entry and exits cleanly', async () => {
 		await using fixture = await createFixture({
@@ -358,24 +364,179 @@ describe('cli integration', () => {
 	});
 
 	test('normalizes a file URL entry before forking', async () => {
-		await using fixture = await createFixture(parentPidFixture);
-		const entryUrl = pathToFileURL(path.join(fixture.path, 'main.ts')).href;
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'console.log(JSON.stringify({ ppid: process.ppid, argv1: process.argv[1] }));\n',
+		});
+		const entryPath = path.join(fixture.path, 'main.ts');
+		const entryUrl = pathToFileURL(entryPath).href;
 
 		const { exited } = runCli([entryUrl], fixture.path, { TSNODE_DISABLE_IN_PROCESS: '1' });
+		const result = await exited;
+		const parsed = JSON.parse(result.stdout.trim()) as { ppid: number; argv1: string };
+
+		expect(parsed.ppid).not.toBe(process.pid);
+		expect(parsed.argv1).toBe(entryPath);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('forks when node flags without a runtime equivalent are present', async () => {
+		await using fixture = await createFixture(parentPidFixture);
+
+		// --trace-warnings has no runtime-equivalent API, so it must still force a fork
+		const { exited } = runCli(['--trace-warnings', 'main.ts'], fixture.path);
 		const result = await exited;
 
 		expect(Number(result.stdout.trim())).not.toBe(process.pid);
 		expect(result.exitCode).toBe(0);
 	});
 
-	test('forks when node flags are present', async () => {
+	test('forks when an unsupported flag is mixed with a supported one', async () => {
 		await using fixture = await createFixture(parentPidFixture);
 
-		// --enable-source-maps only applies to a freshly bootstrapped process
-		const { exited } = runCli(['--enable-source-maps', 'main.ts'], fixture.path);
+		const { exited } = runCli(['--enable-source-maps', '--trace-warnings', 'main.ts'], fixture.path);
 		const result = await exited;
 
 		expect(Number(result.stdout.trim())).not.toBe(process.pid);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('runs in-process when --enable-source-maps is the only leading flag', async () => {
+		await using fixture = await createFixture(parentPidFixture);
+
+		const { exited } = runCli(['--enable-source-maps', 'main.ts'], fixture.path);
+		const result = await exited;
+
+		// Applied via the runtime-equivalent API instead of forcing a fork.
+		expect(Number(result.stdout.trim())).toBe(process.pid);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('runs in-process when --enable-source-maps precedes the argument delimiter', async () => {
+		await using fixture = await createFixture(parentPidFixture);
+
+		const { exited } = runCli(['--enable-source-maps', '--', 'main.ts'], fixture.path);
+		const result = await exited;
+
+		expect(Number(result.stdout.trim())).toBe(process.pid);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('--enable-source-maps produces the same source-mapped stack trace in-process as forked', async () => {
+		const stackTraceFixture = {
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			// The enum forces the esbuild fallback transform, which reflows line numbers,
+			// so a correct stack trace line here can only come from real source-map remapping.
+			'main.ts': [
+				'enum Level { Low, High }',
+				'',
+				'function boom(): never {',
+				'\tthrow new Error(String(Level.High));',
+				'}',
+				'',
+				'console.log(JSON.stringify({ ppid: process.ppid }));',
+				'',
+				'try {',
+				'\tboom();',
+				'} catch (error) {',
+				'\tconsole.log(JSON.stringify({ frame: (error as Error).stack?.split("\\n")[1] }));',
+				'}',
+				'',
+			].join('\n'),
+		};
+
+		await using fixture = await createFixture(stackTraceFixture);
+
+		const inProcess = await runCli(['--enable-source-maps', 'main.ts'], fixture.path).exited;
+		const forked = await runCli(['--enable-source-maps', 'main.ts'], fixture.path, { TSNODE_DISABLE_IN_PROCESS: '1' }).exited;
+
+		const [ inProcessPpidLine, inProcessFrameLine ] = inProcess.stdout.trim().split('\n');
+		const [ forkedPpidLine, forkedFrameLine ] = forked.stdout.trim().split('\n');
+
+		expect(Number((JSON.parse(inProcessPpidLine!) as { ppid: number }).ppid)).toBe(process.pid);
+		expect(Number((JSON.parse(forkedPpidLine!) as { ppid: number }).ppid)).not.toBe(process.pid);
+
+		const inProcessFrame = (JSON.parse(inProcessFrameLine!) as { frame: string }).frame;
+		const forkedFrame = (JSON.parse(forkedFrameLine!) as { frame: string }).frame;
+
+		expect(inProcessFrame).toContain('main.ts:4:');
+		expect(forkedFrame).toContain('main.ts:4:');
+		expect(getSourceLocation(inProcessFrame)).toEqual(getSourceLocation(forkedFrame));
+		expect(inProcess.exitCode).toBe(0);
+		expect(forked.exitCode).toBe(0);
+	});
+
+	test('forks an entry that reads import.meta.main so it is true, matching --import/forked behavior', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'console.log(JSON.stringify({ ppid: process.ppid, main: import.meta.main })); if (import.meta.main) { console.log("MAIN_RAN") }\n',
+		});
+
+		const { exited } = runCli(['main.ts'], fixture.path);
+		const result = await exited;
+		const [ firstLine ] = result.stdout.trim().split('\n');
+		const parsed = JSON.parse(firstLine!) as { ppid: number; main: boolean };
+
+		// The in-process fast path can never make a dynamically imported module
+		// report import.meta.main === true, so this entry must be forked.
+		expect(parsed.ppid).not.toBe(process.pid);
+		expect(parsed.main).toBe(true);
+		expect(result.stdout).toContain('MAIN_RAN');
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('runs in-process when only a dependency (not the entry) reads import.meta.main', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'import "./dep.ts";\nconsole.log(process.ppid);\n',
+			'dep.ts': 'console.log(JSON.stringify({ main: import.meta.main }));\n',
+		});
+
+		const { exited } = runCli(['main.ts'], fixture.path);
+		const result = await exited;
+		const [ depLine, ppidLine ] = result.stdout.trim().split('\n');
+
+		// A dependency module is never the process entry, in-process or forked.
+		expect(JSON.parse(depLine!)).toEqual({ main: false });
+		expect(Number(ppidLine)).toBe(process.pid);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('an in-process entry can spawn a default Worker that still gets tsnode hooks', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'import { Worker } from "node:worker_threads";\nconst worker = new Worker(new URL("./worker.ts", import.meta.url));\nworker.on("error", (error) => { console.error(error); process.exitCode = 1 });\n',
+			// `enum` is non-erasable TS syntax; requires tsnode's esbuild fallback, not Node's native strip.
+			'worker.ts': 'enum Color { Red, Green }\nconsole.log(JSON.stringify({ ppid: process.ppid, color: Color.Red }));\n',
+		});
+
+		const { exited } = runCli(['main.ts'], fixture.path);
+		const result = await exited;
+
+		expect(result.stderr).toBe('');
+		expect(JSON.parse(result.stdout.trim())).toEqual({ ppid: process.pid, color: 0 });
+		expect(result.exitCode).toBe(0);
+	});
+
+	test('an in-process entry can fork() a default child that still gets tsnode hooks', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			...tsconfigForFixture,
+			'main.ts': 'import { fork } from "node:child_process";\nconst child = fork(new URL("./child.ts", import.meta.url));\nchild.on("exit", (code) => process.exit(code ?? 1));\n',
+			// `enum` is non-erasable TS syntax; requires tsnode's esbuild fallback, not Node's native strip.
+			'child.ts': 'enum Color { Red, Green }\nconsole.log(JSON.stringify({ color: Color.Red }));\n',
+		});
+
+		const { exited } = runCli(['main.ts'], fixture.path);
+		const result = await exited;
+
+		expect(result.stderr).toBe('');
+		expect(JSON.parse(result.stdout.trim())).toEqual({ color: 0 });
 		expect(result.exitCode).toBe(0);
 	});
 

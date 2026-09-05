@@ -25,6 +25,7 @@ import {
 	isRelativePath,
 	nodeModulesPath,
 	requestAcceptsQuery,
+	entryUsesImportMetaMain,
 	resolveEntrypointPath,
 	tsExtensions,
 	tsExtensionsPattern,
@@ -136,6 +137,41 @@ describe('unit utilities', () => {
 	});
 
 	describe('path utilities', () => {
+		test('detects import.meta.main without matching comments or strings', () => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-import-meta-'));
+			const entryPath = path.join(directory, 'entry.ts');
+
+			try {
+				fs.writeFileSync(entryPath, [
+					'// import.meta.main',
+					'const text = "import.meta.main";',
+					'const bracketText = `import.meta[\'main\']`;',
+					'console.log(import.meta.main);',
+				].join('\n'));
+
+				expect(entryUsesImportMetaMain(entryPath)).toBe(true);
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+
+		test('does not detect import.meta.main in comments or strings', () => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-import-meta-'));
+			const entryPath = path.join(directory, 'entry.ts');
+
+			try {
+				fs.writeFileSync(entryPath, [
+					'/* import.meta.main */',
+					'const text = "import.meta.main";',
+					'const bracketText = `import.meta[\'main\']`;',
+				].join('\n'));
+
+				expect(entryUsesImportMetaMain(entryPath)).toBe(false);
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+
 		test('resolves real extension and index fallbacks', () => {
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-entrypoint-'));
 			const extensionlessRequest = path.join(directory, 'extensionless');

@@ -77,6 +77,23 @@ describe('runtime integration', () => {
 		expect(result.stderr).toBe('');
 	});
 
+	test('does not duplicate an inherited loader supplied as a relative import path', async () => {
+		await using fixture = await createProjectFixture({
+			'entry.ts': 'console.log(JSON.stringify(process.execArgv));\n',
+		});
+		const loaderPath = path.join(projectRoot, 'src/loader.js');
+		const relativeLoaderPath = path.relative(fixture.path, loaderPath);
+		const relativeImport = relativeLoaderPath.startsWith('.') ? relativeLoaderPath : `./${relativeLoaderPath}`;
+		const result = await runModule(`
+			process.execArgv = ['--import', ${JSON.stringify(relativeImport)}];
+			import { runInProcess } from ${JSON.stringify(runtimePath('run-in-process'))};
+			await runInProcess(['entry.ts']);
+		`, fixture.path);
+
+		expect(JSON.parse(result.stdout)).toEqual([ '--import', relativeImport ]);
+		expect(result.stderr).toBe('');
+	});
+
 	test('runs eval and print code through their in-process runners', async () => {
 		await using fixture = await createProjectFixture({ 'entry.ts': '' });
 		const result = await runModule(`
