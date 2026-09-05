@@ -19,7 +19,11 @@
  *   4. Medium project         – 100 ESM modules
  *   5. Large project          – 300 ESM modules
  *   6. Complex TypeScript     – enums + namespaces (tsnode/tsx only; strip-types can't handle)
- *   7. Cold cache             – transform cache cleared before each iteration (medium project)
+ *   7. Cold cache             – measured via tests/benchmarks/utils/run.ts (not mitata), reported
+ *                               separately after the mitata groups. Distinguishes transform-cold
+ *                               (V8 compile cache retained) from fully-cold (both caches cleared).
+ *   8. Paired CLI vs --import – persistent, alternating-order measurements with median/p90, also
+ *                               reported via tests/benchmarks/utils/run.ts after the mitata groups.
  *
  * IMPORTANT: Memory measurement
  * ─────────────────────────────
@@ -49,6 +53,9 @@ import { createFixture } from 'fs-fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
 import { resolveComparison } from './utils/resolve-tsx';
+import { mean, median, percentile } from './utils/stats';
+import { cliTestFlag, isFeatureSupported } from '../utils/node-features';
+import { gray, lightCyan } from '../../src/utils/ansi';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -91,6 +98,15 @@ const clearTransformCache = () => {
 	for (const entry of readdirSync(benchmarkTmpdir)) {
 		if (preservedCacheDirectories.has(entry)) { continue }
 
+		rmSync(path.join(benchmarkTmpdir, entry), { recursive: true, force: true });
+	}
+};
+
+/** Clears everything, including the preserved `node-compile-cache` — a genuinely "fully cold" state. */
+const clearAllCaches = () => {
+	if (!benchmarkTmpdir) { throw new Error('Benchmark temp directory is not initialized'); }
+
+	for (const entry of readdirSync(benchmarkTmpdir)) {
 		rmSync(path.join(benchmarkTmpdir, entry), { recursive: true, force: true });
 	}
 };
@@ -159,18 +175,16 @@ let comparisonImplementations: ComparisonImplementation[] = [];
  * `tsx` is always benched explicitly (CLI + loader mode), so it is excluded
  * here to avoid a duplicate row that also doubles the group's runtime.
  *
- * `cold` must be set for the cold-cache group: without it these runners keep
- * their populated caches and are measured warm against a cold tsnode, which
- * previously made the summary compare unlike workloads.
+ * Cold-cache measurement for these runners now lives in the manual
+ * cold-cache report (see `runColdCacheReport`) which separates cache
+ * clearing from the timed measurement; this helper only benches warm runs.
  */
-const benchComparisonImplementations = (fixturePath: string, excludedNames: string[] = [], cold = false) => {
+const benchComparisonImplementations = (fixturePath: string, excludedNames: string[] = []) => {
 	for (const implementation of comparisonImplementations) {
 		if (implementation.name === 'tsx' || excludedNames.includes(implementation.name)) {
 			continue;
 		}
-		bench(cold ? `${implementation.name} (cold)` : implementation.name, async () => {
-			if (cold) { clearTransformCache() }
-
+		bench(implementation.name, async () => {
 			await spawn([implementation.cliPath, 'main.ts'], fixturePath);
 		});
 	}
@@ -367,48 +381,55 @@ process.stdout.write('Fixtures ready. Warming caches…\n');
 
 // Warm the transform caches by running each runner once before benchmarks.
 // This ensures "warm" groups measure steady-state performance.
-const warmupRuns: Promise<void>[] = [
-	spawnTsnodeCli(simpleFixture.path),
-	spawnTsnodeCli(smallFixture.path),
-	spawnTsnodeCli(mediumFixture.path),
-	spawnTsnodeCli(largeFixture.path),
-	spawnTsnodeCli(complexFixture.path),
-	spawnTsnodeImport(simpleFixture.path),
-	spawnTsnodeImport(smallFixture.path),
-	spawnTsnodeImport(mediumFixture.path),
-	spawnTsnodeImport(largeFixture.path),
-	spawnTsnodeImport(complexFixture.path),
+//
+// Each entry is a *thunk*, not an already-started promise: starting every spawn
+// up front (e.g. `spawnTsnodeCli(...)` directly in this array) begins them all
+// concurrently, so a later `for...of await` loop only awaits completion in
+// order — it does not run them sequentially. Deferring the call itself until
+// the loop reaches it is what makes warm-up genuinely sequential and avoids
+// CPU contention skewing the first real runs.
+const warmupRuns: (() => Promise<void>)[] = [
+	() => spawnTsnodeCli(simpleFixture.path),
+	() => spawnTsnodeCli(smallFixture.path),
+	() => spawnTsnodeCli(mediumFixture.path),
+	() => spawnTsnodeCli(largeFixture.path),
+	() => spawnTsnodeCli(complexFixture.path),
+	() => spawnTsnodeImport(simpleFixture.path),
+	() => spawnTsnodeImport(smallFixture.path),
+	() => spawnTsnodeImport(mediumFixture.path),
+	() => spawnTsnodeImport(largeFixture.path),
+	() => spawnTsnodeImport(complexFixture.path),
 ];
 if (tsxImplementation && tsxEsmLoaderPath) {
 	warmupRuns.push(
-		spawn([tsxImplementation.cliPath, 'main.ts'], simpleFixture.path),
-		spawn([tsxImplementation.cliPath, 'main.ts'], smallFixture.path),
-		spawn([tsxImplementation.cliPath, 'main.ts'], mediumFixture.path),
-		spawn([tsxImplementation.cliPath, 'main.ts'], largeFixture.path),
-		spawn([tsxImplementation.cliPath, 'main.ts'], complexFixture.path),
-		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], simpleFixture.path),
-		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], smallFixture.path),
-		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], mediumFixture.path),
-		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], largeFixture.path),
-		spawn(['--import', tsxEsmLoaderPath, 'main.ts'], complexFixture.path),
+		() => spawn([tsxImplementation.cliPath, 'main.ts'], simpleFixture.path),
+		() => spawn([tsxImplementation.cliPath, 'main.ts'], smallFixture.path),
+		() => spawn([tsxImplementation.cliPath, 'main.ts'], mediumFixture.path),
+		() => spawn([tsxImplementation.cliPath, 'main.ts'], largeFixture.path),
+		() => spawn([tsxImplementation.cliPath, 'main.ts'], complexFixture.path),
+		() => spawn(['--import', tsxEsmLoaderPath, 'main.ts'], simpleFixture.path),
+		() => spawn(['--import', tsxEsmLoaderPath, 'main.ts'], smallFixture.path),
+		() => spawn(['--import', tsxEsmLoaderPath, 'main.ts'], mediumFixture.path),
+		() => spawn(['--import', tsxEsmLoaderPath, 'main.ts'], largeFixture.path),
+		() => spawn(['--import', tsxEsmLoaderPath, 'main.ts'], complexFixture.path),
 	);
 }
 for (const implementation of comparisonImplementations) {
 	warmupRuns.push(
-		spawn([implementation.cliPath, 'main.ts'], simpleFixture.path),
-		spawn([implementation.cliPath, 'main.ts'], smallFixture.path),
-		spawn([implementation.cliPath, 'main.ts'], mediumFixture.path),
+		() => spawn([implementation.cliPath, 'main.ts'], simpleFixture.path),
+		() => spawn([implementation.cliPath, 'main.ts'], smallFixture.path),
+		() => spawn([implementation.cliPath, 'main.ts'], mediumFixture.path),
 		...(implementation.name === 'esrun'
 			? []
-			: [spawn([implementation.cliPath, 'main.ts'], largeFixture.path)]),
+			: [() => spawn([implementation.cliPath, 'main.ts'], largeFixture.path)]),
 		...(implementation.name === 'ts-node'
 			? []
-			: [spawn([implementation.cliPath, 'main.ts'], complexFixture.path)]),
+			: [() => spawn([implementation.cliPath, 'main.ts'], complexFixture.path)]),
 	);
 }
 // Run warmups sequentially to avoid CPU contention skewing the first real runs
 for (const warmup of warmupRuns) {
-	await warmup;
+	await warmup();
 }
 
 process.stdout.write('Ready. Running benchmarks…\n\n');
@@ -566,44 +587,175 @@ group('Complex TypeScript (enums + namespaces — transpilation required)', () =
 });
 
 // ── 6. Cold cache — medium project ──────────────────────────────────────────
-// Clears the on-disk transform cache before every iteration to simulate a
-// first-run scenario (e.g. after install or on CI).
-// Note: cache-clear (~1–5 ms) is included in the measurement but is negligible
-// relative to the 100–300 ms process-startup cost.
-group('Cold cache — medium project (100 modules, cache cleared each run)', () => {
-	summary(() => {
-		bench('--import tsnode (cold)', async () => {
-			await clearTransformCache();
-			await spawnTsnodeImport(coldMediumFixture.path);
-		});
+// Runs outside mitata: mitata's `bench()` callback is the timed unit, so
+// clearing caches *inside* it (the previous approach) counted cache-clear
+// time as if it were startup time. This manual loop clears caches, THEN
+// starts the timer immediately before the spawn — only spawn-to-exit is
+// timed. `transform-cold` retains the V8 compile cache (the runner's own
+// bytecode); `fully-cold` clears everything, including it.
+const coldCacheSamples = 12;
 
-		bench('tsnode (cold)', async () => {
-			await clearTransformCache();
-			await spawnTsnodeCli(coldMediumFixture.path);
-		});
+const timeSpawn = async (args: string[], cwd: string, env?: Record<string, string>) => {
+	const start = performance.now();
+	await spawn(args, cwd, env);
+	return performance.now() - start;
+};
 
-		if (tsxImplementation && tsxEsmLoaderPath) {
-			bench('--import tsx (cold)', async () => {
-				await clearTransformCache();
-				await spawn(['--import', tsxEsmLoaderPath, 'main.ts'], coldMediumFixture.path);
-			});
+const measureCold = async (clear: () => void, run: () => Promise<number>) => {
+	const times: number[] = [];
+	for (let i = 0; i < coldCacheSamples; i++) {
+		clear();
+		times.push(await run());
+	}
+	return times;
+};
 
-			bench('tsx (cold)', async () => {
-				await clearTransformCache();
-				await spawn([tsxImplementation.cliPath, 'main.ts'], coldMediumFixture.path);
-			});
+type ReportRow = { label: string; values: number[] };
+
+const sparklineChars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/** Bins raw samples into a density histogram, mirroring mitata's per-bench sparkline at our much smaller sample size. */
+const renderSparkline = (values: number[]) => {
+	const min = Math.min(...values);
+	const span = Math.max(...values) - min || 1;
+	const bucketCount = Math.min(values.length, 12);
+	const buckets = new Array(bucketCount).fill(0);
+
+	for (const value of values) {
+		buckets[Math.min(bucketCount - 1, Math.floor(((value - min) / span) * bucketCount))] += 1;
+	}
+
+	const maxBucket = Math.max(...buckets);
+	return buckets.map(count => sparklineChars[Math.round((count / maxBucket) * (sparklineChars.length - 1))]).join('');
+};
+
+/**
+ * Mirrors mitata's `ms/iter` + `(min … max)` layout: a highlighted median/histogram
+ * line followed by a dimmed range/percentile line, with a blank line between rows.
+ */
+const printReportTable = (rows: ReportRow[]) => {
+	const labelWidth = Math.max(...rows.map(({ label }) => label.length));
+	const indent = ' '.repeat(labelWidth);
+
+	for (const { label, values } of rows) {
+		const min = Math.min(...values);
+		const max = Math.max(...values);
+		const medianStr = `${median(values).toFixed(2)} ms/iter`.padStart(15);
+		const rangeStr = `(${min.toFixed(2)} ms … ${max.toFixed(2)} ms)`;
+		const tailStr = `p90 ${percentile(values, 90).toFixed(2)} ms   mean ${mean(values).toFixed(2)} ms`;
+
+		process.stdout.write(`    ${label.padEnd(labelWidth)}  ${lightCyan(medianStr)}  ${lightCyan(renderSparkline(values))}\n`);
+		process.stdout.write(`    ${indent}  ${gray(rangeStr)}   ${gray(tailStr)}\n\n`);
+	}
+};
+
+const runColdCacheReport = async () => {
+	process.stdout.write('\nCold cache — medium project (100 modules)\n');
+
+	process.stdout.write('  transform-cold (V8 compile cache retained):\n');
+	const transformColdRows: ReportRow[] = [
+		{ label: '--import tsnode', values: await measureCold(clearTransformCache, () => timeSpawn(['--import', localLoaderPath, 'main.ts'], coldMediumFixture.path, mergeTsnodeEnv())) },
+		{ label: 'tsnode', values: await measureCold(clearTransformCache, () => timeSpawn([localCliPath, 'main.ts'], coldMediumFixture.path, mergeTsnodeEnv())) },
+	];
+
+	if (tsxImplementation && tsxEsmLoaderPath) {
+		transformColdRows.push(
+			{ label: '--import tsx', values: await measureCold(clearTransformCache, () => timeSpawn(['--import', tsxEsmLoaderPath, 'main.ts'], coldMediumFixture.path)) },
+			{ label: 'tsx', values: await measureCold(clearTransformCache, () => timeSpawn([tsxImplementation.cliPath, 'main.ts'], coldMediumFixture.path)) },
+		);
+	}
+
+	for (const implementation of comparisonImplementations) {
+		if (implementation.name === 'tsx') { continue }
+		transformColdRows.push({ label: implementation.name, values: await measureCold(clearTransformCache, () => timeSpawn([implementation.cliPath, 'main.ts'], coldMediumFixture.path)) });
+	}
+
+	// --strip-types has no transform cache; every run is effectively cold already
+	transformColdRows.push({ label: 'node --strip-types (no cache)', values: await measureCold(() => {}, () => timeSpawn(['--strip-types', 'main.ts'], coldMediumFixture.path)) });
+
+	printReportTable(transformColdRows);
+
+	process.stdout.write('  fully-cold (transform AND V8 compile caches empty):\n');
+	printReportTable([
+		{ label: '--import tsnode', values: await measureCold(clearAllCaches, () => timeSpawn(['--import', localLoaderPath, 'main.ts'], coldMediumFixture.path, mergeTsnodeEnv())) },
+		{ label: 'tsnode', values: await measureCold(clearAllCaches, () => timeSpawn([localCliPath, 'main.ts'], coldMediumFixture.path, mergeTsnodeEnv())) },
+	]);
+};
+
+// ── 7. Paired CLI vs --import (persistent, alternating order) ──────────────
+// Identical fixtures for both variants; which variant runs first alternates
+// each sample so scheduling/thermal drift doesn't bias one side.
+const pairedSamples = 20;
+
+const runPairedReport = async (
+	name: string,
+	cwd: string,
+	cliArgs: string[],
+	importArgs: string[],
+	env?: Record<string, string>,
+) => {
+	const cliTimes: number[] = [];
+	const importTimes: number[] = [];
+
+	for (let i = 0; i < pairedSamples; i++) {
+		if (i % 2 === 0) {
+			cliTimes.push(await timeSpawn(cliArgs, cwd, env));
+			importTimes.push(await timeSpawn(importArgs, cwd, env));
+		} else {
+			importTimes.push(await timeSpawn(importArgs, cwd, env));
+			cliTimes.push(await timeSpawn(cliArgs, cwd, env));
 		}
+	}
 
-		benchComparisonImplementations(coldMediumFixture.path, [], true);
+	process.stdout.write(`\n  ${name}\n`);
+	printReportTable([
+		{ label: 'CLI', values: cliTimes },
+		{ label: '--import', values: importTimes },
+	]);
+};
 
-		// --strip-types has no transform cache; every run is effectively cold
-		bench('node --strip-types (no cache)', async () => {
-			await spawn(['--strip-types', 'main.ts'], coldMediumFixture.path);
+const runPairedReports = async () => {
+	process.stdout.write('\nPaired CLI vs --import (persistent, alternating order, 20 samples)\n');
+
+	await runPairedReport(
+		'Ordinary execution (single file, warm)',
+		simpleFixture.path,
+		[localCliPath, 'main.ts'],
+		['--import', localLoaderPath, 'main.ts'],
+	);
+
+	await runPairedReport(
+		'Leading Node flag with runtime equivalent (--enable-source-maps, in-process on CLI)',
+		simpleFixture.path,
+		[localCliPath, '--enable-source-maps', 'main.ts'],
+		['--enable-source-maps', '--import', localLoaderPath, 'main.ts'],
+	);
+
+	if (isFeatureSupported(cliTestFlag)) {
+		await using testFixture = await createFixture({
+			...tsconfigForTree,
+			'package.json': JSON.stringify({ type: 'module' }),
+			'main.test.ts': 'import assert from \'node:assert/strict\';\nimport test from \'node:test\';\n\ntest(\'startup\', () => {\n\tassert.equal(1, 1);\n});\n',
 		});
-	});
-});
 
-// ── 7. CLI signal-relay overhead ───────────────────────────────────────────
+		await runPairedReport(
+			'node --test (forces fork on CLI)',
+			testFixture.path,
+			[localCliPath, '--test', 'main.test.ts'],
+			['--import', localLoaderPath, '--test', 'main.test.ts'],
+		);
+	}
+
+	await runPairedReport(
+		'Forced signal relay (fork path)',
+		simpleFixture.path,
+		[localCliPath, 'main.ts'],
+		['--import', localLoaderPath, 'main.ts'],
+		{ TSNODE_DISABLE_IN_PROCESS: '1', TSNODE_DISABLE_SIGNAL_RELAY: '0', TSNODE_FORCE_SIGNAL_RELAY: '1' },
+	);
+};
+
+// ── 8. CLI signal-relay overhead ───────────────────────────────────────────
 // Isolates parent<->child signal relay setup cost in tsnode CLI mode.
 //
 // The relay only exists to forward signals to a child process, so these must
@@ -635,6 +787,10 @@ group('CLI signal relay overhead (single file, fork path)', () => {
 
 	// Parent-process measurement; meaningless for spawned children
 	await run({ format: 'mitata', filter: /.*/, throw: false });
+
+	// Manual harnesses run after mitata so they don't contend with it for CPU.
+	await runColdCacheReport();
+	await runPairedReports();
 } finally {
 	// Clean up all fixture directories regardless of benchmark outcome
 	await Promise.allSettled(fixtureCleanup.map((cleanup) => Promise.resolve().then(cleanup)));

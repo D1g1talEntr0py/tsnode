@@ -25,7 +25,7 @@ For `--json`, use `pnpm --silent` so pnpm's script banner stays out of stdout an
 
 Additional opt-in scenarios cover non-erasable syntax fallback (`esm-ts-enum`, `esm-ts-namespace`, `esm-ts-decorator`), a mixed mostly-erasable tree with sparse fallback modules (`esm-ts-mixed-decorator`), and fork-required CLI startup (`cli-test`).
 
-Running with no scenario names runs the **default set**. All tsnode scenarios run through the **tsnode CLI** (not `--import`) for consistency with real usage; the CLI's extra Node spawn is constant across rows and visible against `node-baseline`.
+Running with no scenario names runs the **default set**. All tsnode scenarios run through the **tsnode CLI** (not `--import`) for consistency with real usage; ordinary CLI invocations run in-process (no extra Node spawn), so these rows reflect the same startup path users get from `tsnode file.ts`.
 
 ### Why this default set
 

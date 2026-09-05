@@ -6,6 +6,7 @@ export default defineConfig({
 		fileParallelism: false,
 		testTimeout: 300_000,
 		hookTimeout: 300_000,
+		isolate: false,
 		coverage: {
 			reportsDirectory: 'tests/coverage',
 			include: ['src/**/*.ts'],

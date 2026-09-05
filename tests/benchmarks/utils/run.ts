@@ -53,7 +53,9 @@ export const runOnce = async (
 	childProcess.stderr.on('data', chunk => { stderr += chunk; });
 
 	childProcess.on('error', reject);
-	childProcess.on('exit', (exitCode) => {
+	// 'close' (not 'exit') is required here: 'exit' can fire before stdio streams
+	// finish flushing, which would risk parsing a truncated __BENCH__ line.
+	childProcess.on('close', (exitCode) => {
 		const wallMs = performance.now() - startTime;
 
 		if (exitCode !== 0) {
