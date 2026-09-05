@@ -53,7 +53,7 @@
 		"benchmark:hooks": "pnpm build && node ./dist/cli.js tests/benchmarks/hooks.ts",
 		"benchmark:compare": "pnpm build && node ./dist/cli.js tests/benchmarks/compare.ts",
 		"benchmark:memory": "pnpm build && node ./dist/cli.js tests/benchmarks/memory-profile.ts",
-		"lint": "eslint ./src",
+		"lint": "eslint --flag unstable_native_nodejs_ts_config ./src",
 		"type-check": "tsc",
 		"test": "vitest run",
 		"test:coverage": "c8 --all --include=src/** --exclude=src/types.ts --exclude=tests/** --exclude=scripts/** --exclude-after-remap=false --reporter=text --reporter=lcov --reports-dir=tests/coverage-c8 vitest run",
