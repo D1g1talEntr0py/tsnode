@@ -32,7 +32,7 @@ Forked from [tsx](https://github.com/privatenumber/tsx) by [Hiroki Osame](https:
 - [Custom tsconfig path](#custom-tsconfig-path)
 - [Disable transform cache](#disable-transform-cache)
 - [Shell scripts](#shell-scripts)
-- [Fast path: node --import](#fast-path-node---import)
+- [Preloading with node --import](#preloading-with-node---import)
 - [Programmatic API](#programmatic-api)
   - [register()](#register)
   - [tsImport()](#tsimport)
@@ -130,13 +130,7 @@ tsnode ./script.ts
 tsnode watch ./script.ts
 ```
 
-3. Fastest one-off execution path
-
-```sh
-node --import @d1g1tal/tsnode ./script.ts
-```
-
-4. Type-check in a separate step
+3. Type-check in a separate step
 
 ```sh
 tsc --noEmit
@@ -144,21 +138,18 @@ tsc --noEmit
 
 ## How to choose between tsnode and node --import
 
-This is the decision that matters most in day-to-day use.
+`tsnode ./script.ts` is the everyday command. For an ordinary invocation (no leading Node flags, no `--test`, no `-e`/`-p`, not expecting IPC from a parent process), it runs your script in the same process — there's no extra child-process hop, so it has comparable startup overhead to `node --import`.
 
-Use `tsnode` when you want CLI features:
+Use `tsnode` for everyday script execution and whenever you want CLI features:
 
 - `watch`
 - `--test`
 - REPL
 - `-e` / `-p`
 
-Use `node --import @d1g1tal/tsnode` when startup overhead is the main concern for plain file execution.
+Use `node --import @d1g1tal/tsnode` when something else already launches Node directly and you want to preload tsnode's loader into that process — for example a test runner, another CLI, or a programmatic launcher that controls its own `node` invocation.
 
-Rule of thumb:
-
-- Feature-rich workflow: use `tsnode`
-- Lowest startup overhead for direct script execution: use `node --import`
+A few scenarios still spawn a child process even from the `tsnode` CLI: leading Node flags (`--inspect`, `--enable-source-maps`, etc.), `--test`, eval/print (`-e`/`-p`), or when the parent needs to relay signals/IPC. Entries that reference `import.meta.main` are also forked automatically, since main-module identity can't be correctly reported for a dynamically imported module — this is transparent and needs no action from you.
 
 ## CLI argument rules
 
@@ -383,26 +374,27 @@ chmod +x ./script.ts
 
 This is especially useful for team automation scripts where TypeScript readability is preferable to complex shell script logic.
 
-## Fast path: node --import
+## Preloading with node --import
 
-For low-overhead direct file execution, use:
+Use `--import` when a tool or script already launches Node directly and you want to preload tsnode's loader into that process, rather than going through the `tsnode` CLI:
 
 ```sh
 node --import @d1g1tal/tsnode ./src/main.ts
 ```
 
-Why it is often faster:
-
-- tsnode CLI may spawn a child process depending on mode
-- `node --import` runs in a single process
-
 Good use cases:
 
-- short-lived scripts called frequently
-- Makefile / Docker commands that already run `node`
-- startup-focused benchmarks
+- test runners or other CLIs that invoke `node` themselves
+- programmatic launchers that control their own `node` invocation
+- Makefile / Docker commands that already run `node` directly
 
-Set custom tsconfig for this mode:
+For running a script yourself, prefer the plain CLI:
+
+```sh
+tsnode ./src/main.ts
+```
+
+Set custom tsconfig for `--import` mode:
 
 ```sh
 TSNODE_TSCONFIG_PATH=./path/to/tsconfig.custom.json node --import @d1g1tal/tsnode ./main.ts
@@ -416,21 +408,7 @@ NODE_OPTIONS='--import @d1g1tal/tsnode' npx some-binary
 
 Caveat: child Node processes inherit `NODE_OPTIONS`, which can add overhead in process-heavy workflows.
 
-Optional helper function:
-
-```sh
-# ~/.bashrc or ~/.zshrc
-tsnode() {
-  case "$1" in
-    ""|watch|-e|--eval|-p|--print|--test)
-      command tsnode "$@"
-      ;;
-    *)
-      node --import @d1g1tal/tsnode "$@"
-      ;;
-  esac
-}
-```
+Advanced note: a default (execArgv-less) `Worker` or `child_process.fork()` call made from a script running under tsnode correctly inherits the loader hooks, whether the parent ran in-process or was forked.
 
 ## Programmatic API
 
@@ -573,7 +551,7 @@ Practical guidance:
 
 - warm runs usually benefit from cache reuse
 - `--no-cache` is for diagnostics, not normal use
-- `node --import` is usually best for startup-sensitive one-off runs
+- plain `tsnode ./file.ts` runs in-process and has comparable startup overhead to `node --import`; reach for `--import` when preloading into a process you don't control, not for a speed gain over the CLI
 
 Benchmark whichever path matches your real workload:
 
@@ -628,9 +606,13 @@ Watch subcommand options:
 
 Because tsnode executes TypeScript but does not perform static type-checking. Run `tsc --noEmit` separately.
 
-### Why is node --import faster than tsnode for my quick script?
+### Is node --import faster than tsnode for my quick script?
 
-`node --import` avoids some CLI/process overhead and is often faster for short-lived runs.
+No — an ordinary `tsnode file.ts` invocation runs in-process (no extra fork), so its overhead is comparable to `node --import`. Reach for `--import` when a tool already launches Node directly and you want to preload the loader into it, not for a speed gain over the CLI.
+
+### Why did my script just fork a child process?
+
+A handful of scenarios still spawn a child process: leading Node flags (`--inspect`, `--enable-source-maps`, etc.), `--test`, eval/print (`-e`/`-p`), an entry that references `import.meta.main`, or when the parent needs to relay signals/IPC. Ordinary script execution does not fork.
 
 ### Why does my CommonJS script not work?
 
@@ -660,7 +642,7 @@ No. Watch mode is a tsnode CLI feature.
 
 ### Should I always use node --import?
 
-Use it when startup overhead is your bottleneck. For watch/test/repl/eval/print workflows, use tsnode CLI.
+No. Use plain `tsnode ./script.ts` for everyday script execution — it runs in-process with comparable overhead. Reach for `node --import` when another tool already launches Node directly and you want to preload tsnode's loader into it, or for watch/test/repl/eval/print workflows use the `tsnode` CLI directly.
 
 ## What was removed from tsx
 
