@@ -42,7 +42,7 @@ jobs:
               return;
             }
 
-            const messages = execFileSync('git', ['log', '--format=%B%x00', `${base}..${head}`], {
+            const messages = execFileSync('git', ['log', '--format=%x00%B', `${base}..${head}`], {
               encoding: 'utf8',
             }).split('\0').filter(Boolean);
 
