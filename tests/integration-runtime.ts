@@ -114,7 +114,7 @@ describe('runtime integration', () => {
 			stdio: [ 'pipe', 'pipe', 'pipe' ],
 		});
 		const resultPromise = collect(childProcess);
-		childProcess.stdin!.end('const value: number = 40; console.log(value + 2);\n');
+		childProcess.stdin!.end('const value: number = 40; console.log(value + 2);');
 		const result = await resultPromise;
 
 		expect(result.stdout.trim()).toBe('42');
