@@ -39,7 +39,6 @@
 			"default": "./dist/api/index.js"
 		},
 		"./cli": "./dist/cli.js",
-		"./suppress-warnings": "./dist/suppress-warnings.js",
 		"./preflight": "./dist/preflight.js",
 		"./repl": "./dist/repl.js"
 	},
