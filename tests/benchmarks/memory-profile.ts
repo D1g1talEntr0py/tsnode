@@ -10,9 +10,8 @@
  */
 
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const __dirname = import.meta.dirname;
 
 console.log(`
 ╔════════════════════════════════════════════════════════════════════╗
@@ -49,7 +48,7 @@ SOLUTION: Use external profiling tools instead
      node --inspect-brk dist/cli.js fixture.ts
      # Open chrome://inspect in Chrome
 
-3. MEMORY TIMELINE (Node 18+):
+3. MEMORY TIMELINE (Node 24.11.1+):
    ──────────────────────────
 
    Using --expose-gc with tracking:

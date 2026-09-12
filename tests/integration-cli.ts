@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { createFixture } from 'fs-fixture';
 
-const projectRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
+const projectRoot = path.resolve(import.meta.dirname, '..');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
 
@@ -140,6 +140,26 @@ describe('cli integration', () => {
 		expect(result.stderr).toBe('');
 		expect(result.stdout.trim()).toBe('42');
 		expect(result.exitCode).toBe(0);
+	});
+
+	test.each([ '--eval', '--print', '--input-type', '--tsconfig' ])('rejects a missing string value for %s', async (option) => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+
+		const { exited } = runCli([option], fixture.path);
+		const result = await exited;
+
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr).toContain(`Option ${option} requires a string value`);
+	});
+
+	test('uses the last repeated eval value', async () => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+
+		const { exited } = runCli(['-e', 'console.log("first")', '--eval', 'console.log("second")'], fixture.path);
+		const result = await exited;
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout.trim()).toBe('second');
 	});
 
 	test('supports top-level await and argv forwarding in eval mode', async () => {

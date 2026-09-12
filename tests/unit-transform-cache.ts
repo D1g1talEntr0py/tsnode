@@ -191,6 +191,17 @@ describe('transform cache', () => {
 		expect(fs.existsSync(filePath)).toBe(false);
 	});
 
+	test('drops valid JSON with the wrong transform shape', async () => {
+		const key = `wrong-shape-${randomUUID()}`;
+		const filePath = trackPath(cacheFilePath(key));
+
+		fs.writeFileSync(filePath, JSON.stringify({ output: 'export {}' }));
+
+		expect(cache.get(key)).toBeUndefined();
+		await settle();
+		expect(fs.existsSync(filePath)).toBe(false);
+	});
+
 	test('recovers a corrupted disk entry when it is replaced', async () => {
 		const key = `recovered-${randomUUID()}`;
 		const filePath = trackPath(cacheFilePath(key));
@@ -219,6 +230,17 @@ describe('transform cache', () => {
 		});
 
 		expect(maximumActiveTasks).toBe(4);
+	});
+
+	test('processes undefined values in bounded workers', async () => {
+		const processed: Array<number | undefined> = [];
+
+		await forEachConcurrent<number | undefined>([ 1, undefined, 2 ], 2, async value => {
+			processed.push(value);
+		});
+
+		expect(processed).toHaveLength(3);
+		expect(processed).toContain(undefined);
 	});
 
 	test('throws for non-positive concurrency values', async () => {

@@ -1,9 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createFixture } from 'fs-fixture';
-import { isFeatureSupported, type Version } from '../utils/node-features';
 import type { SpecifierStyle } from './utils/generate-fixture';
 import { scenarios, type Scenario } from './utils/scenarios';
 import { resolveComparison, type ComparisonImplementation } from './utils/resolve-tsx';
@@ -166,7 +164,7 @@ await using installRoot = await createFixture();
 const implementations: ComparisonImplementation[] = [
 	{
 		name: 'local',
-		cliPath: fileURLToPath(new URL('../../dist/cli.js', import.meta.url)),
+		cliPath: path.resolve(import.meta.dirname, '../../dist/cli.js'),
 	},
 	...await Promise.all(
 		compare.map(comparison => resolveComparison(comparison, installRoot.path)),
@@ -174,7 +172,6 @@ const implementations: ComparisonImplementation[] = [
 ];
 
 const rows: Row[] = [];
-const skipped: string[] = [];
 
 // Measurements are intentionally sequential: concurrent child processes
 // would contend for CPU and corrupt the timings.
@@ -190,17 +187,6 @@ for (const scenario of selectedScenarios) {
 	};
 
 	for (const node of nodeBinaries) {
-		if (
-			scenario.supportedNodeVersions
-			&& !isFeatureSupported(
-				scenario.supportedNodeVersions,
-				node.version.split('.').map(Number) as Version,
-			)
-		) {
-			skipped.push(`${scenario.name} on Node ${node.version} (unsupported)`);
-			continue;
-		}
-
 		// node-runner scenarios (baseline/native) ignore --compare
 		const cells = (
 			scenario.runner === 'node' || scenario.implementations === 'local-only'
@@ -306,7 +292,4 @@ function renderTables() {
 		}
 	}
 
-	if (skipped.length > 0) {
-		out(`\nSkipped:\n${skipped.map(entry => `  ${entry}`).join('\n')}`);
-	}
 }

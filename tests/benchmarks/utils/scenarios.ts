@@ -1,5 +1,4 @@
 import type { FileTree } from 'fs-fixture';
-import { cliTestFlag, nativeTypeScript, type Version } from '../../utils/node-features';
 import {
 	createTsconfigForTree,
 	esmTree,
@@ -29,12 +28,6 @@ export type Scenario = {
 	 */
 	runner: 'tsx' | 'node';
 	implementations?: 'all' | 'local-only';
-
-	/**
-	 * Node versions the scenario requires, in `node-features.ts` gate format
-	 * (checked with `isFeatureSupported`); skipped on unsupported versions.
-	 */
-	supportedNodeVersions?: Version[];
 
 	/**
 	 * Whether this runs when no scenario is named. The default set is the
@@ -132,7 +125,6 @@ export const scenarios: Scenario[] = [
 		}),
 		entry: 'main.ts',
 		runner: 'node',
-		supportedNodeVersions: nativeTypeScript,
 	},
 	{
 		name: 'cli-test',
@@ -147,6 +139,5 @@ export const scenarios: Scenario[] = [
 		args: (entryPath, cliPath) => [cliPath, '--test', entryPath],
 		runner: 'tsx',
 		implementations: 'local-only',
-		supportedNodeVersions: cliTestFlag,
 	},
 ];

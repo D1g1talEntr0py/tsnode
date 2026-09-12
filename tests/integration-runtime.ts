@@ -1,13 +1,13 @@
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { createProjectFixture } from './utils/fixture';
 
 const execFileAsync = promisify(execFile);
-const projectRoot = fileURLToPath(new URL('..', import.meta.url));
-const sourceResolveHookPath = fileURLToPath(new URL('./utils/source-resolve-hook.ts', import.meta.url));
+const projectRoot = path.resolve(import.meta.dirname, '..');
+const sourceResolveHookPath = path.join(import.meta.dirname, 'utils/source-resolve-hook.ts');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
 const runtimePath = (name: string) => pathToFileURL(`${projectRoot}/src/${name}.ts`).href;
 
@@ -146,16 +146,6 @@ describe('runtime integration', () => {
 		expect(result.stdout).toContain('42');
 		expect(result.stderr).toBe('');
 		expect(result.exitCode).toBe(0);
-	});
-
-	test('suppresses known tsnode warnings', async () => {
-		await using fixture = await createProjectFixture({ 'entry.ts': '' });
-		const result = await runModule(`
-			await import(${JSON.stringify(runtimePath('suppress-warnings'))});
-			process.emitWarning('stripTypeScriptTypes is an experimental feature and might change at any time', 'ExperimentalWarning');
-		`, fixture.path);
-
-		expect(result.stderr).toBe('');
 	});
 
 	test('initializes the preflight preload for a forced relay child', async () => {

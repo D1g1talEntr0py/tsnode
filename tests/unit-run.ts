@@ -92,7 +92,7 @@ describe('run', () => {
 		`;
 		const realSpawn = process.getBuiltinModule('node:child_process')!.spawn;
 		const childProcess = realSpawn(process.execPath, [
-			'--experimental-strip-types', '--import', sourceResolveHookPath,			'--input-type=module', '-e', driver,
+			'--experimental-strip-types', '--import', sourceResolveHookPath, '--input-type=module', '-e', driver,
 		], {
 			env: { ...process.env, NODE_OPTIONS: `--experimental-strip-types --import ${sourceResolveHookPath}` },
 			stdio: ['ignore', 'pipe', 'pipe', 'ipc'],

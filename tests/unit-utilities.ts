@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, expectTypeOf, test } from 'vitest';
 import { outdent } from './utils/outdent';
 import { readJsonFile, readJsonFileSync } from '../src/utils/read-json-file';
+import type { JsonValue } from '../src/utils/json';
 import { tmpdir, legacyTmpdirs, cacheSchemaVersion } from '../src/utils/temporary-directory';
 import {
 	bgBlue,
@@ -289,6 +291,11 @@ describe('unit utilities', () => {
 	});
 
 	describe('json reading', () => {
+		test('includes undefined in undecoded reader return types', () => {
+			expectTypeOf(readJsonFileSync('config.json')).toEqualTypeOf<JsonValue | undefined>();
+			expectTypeOf(readJsonFile('config.json')).toEqualTypeOf<Promise<JsonValue | undefined>>();
+		});
+
 		test('reads and parses valid JSON', () => {
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
 			const filePath = path.join(directory, 'config.json');
@@ -301,11 +308,25 @@ describe('unit utilities', () => {
 			`);
 
 			try {
-				expect(readJsonFileSync<{ name: string; enabled: boolean; count: number }>(filePath)).toEqual({
+				expect(readJsonFileSync(filePath)).toEqual({
 					name: 'tsnode',
 					enabled: true,
 					count: 2,
 				});
+			} finally {
+				fs.rmSync(directory, { recursive: true, force: true });
+			}
+		});
+
+		test('returns decoder-derived values', async () => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
+			const filePath = path.join(directory, 'decoded.json');
+			const decodeName = (value: unknown) => value && typeof value === 'object' && 'name' in value && typeof value.name === 'string' ? value.name : undefined;
+			fs.writeFileSync(filePath, JSON.stringify({ name: 'tsnode' }));
+
+			try {
+				expect(readJsonFileSync(filePath, decodeName)).toBe('tsnode');
+				expect(await readJsonFile(filePath, decodeName)).toBe('tsnode');
 			} finally {
 				fs.rmSync(directory, { recursive: true, force: true });
 			}
@@ -319,6 +340,12 @@ describe('unit utilities', () => {
 		test('returns undefined for missing files asynchronously', async () => {
 			const filePath = path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`);
 			expect(await readJsonFile(filePath)).toBeUndefined();
+		});
+
+		test('returns undefined for missing file URLs', async () => {
+			const fileUrl = pathToFileURL(path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`));
+			expect(readJsonFileSync(fileUrl)).toBeUndefined();
+			expect(await readJsonFile(fileUrl)).toBeUndefined();
 		});
 
 		test('returns undefined for invalid JSON', () => {

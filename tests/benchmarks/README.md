@@ -65,8 +65,6 @@ tsnode requires Node.js 24.11.1 or newer and always uses sync `module.registerHo
 pnpm benchmark hooks-passthrough --node 24.11.1
 ```
 
-Scenarios below their `minNodeVersion` are skipped, not failed.
-
 ## Reproducibility
 
 Runner caches are isolated under a disposable temporary directory and reset before each cell's warmup to avoid stale-file and cross-runner skew. Cold runs clear that sandbox before every measurement while preserving Node's compile cache.

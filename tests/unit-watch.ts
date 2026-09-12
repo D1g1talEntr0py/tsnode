@@ -136,6 +136,8 @@ describe('watch command', () => {
 		await runWatchCommand(['entry.ts']);
 
 		const dataListener = mocks.getDataListener()!;
+		dataListener({ type: 'signal', signal: 'SIGINT' });
+		dataListener({ type: 'dependency', path: 42 });
 		dataListener({ type: 'dependency', path: '/tmp/first.ts' });
 		stdinDataHandler!();
 		dataListener({ type: 'dependency', path: '/tmp/second.ts' });

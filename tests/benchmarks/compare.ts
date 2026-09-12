@@ -47,21 +47,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { spawn as spawnProcess } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { createFixture } from 'fs-fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
 import { resolveComparison } from './utils/resolve-tsx';
 import { mean, median, percentile } from './utils/stats';
-import { cliTestFlag, isFeatureSupported } from '../utils/node-features';
 import { gray, lightCyan } from '../../src/utils/ansi';
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const __dirname = import.meta.dirname;
 const nodePath = process.execPath;
 const localCliPath = path.resolve(__dirname, '../../dist/cli.js');
 const localLoaderPath = path.resolve(__dirname, '../../dist/loader.js');
@@ -731,20 +729,18 @@ const runPairedReports = async () => {
 		['--enable-source-maps', '--import', localLoaderPath, 'main.ts'],
 	);
 
-	if (isFeatureSupported(cliTestFlag)) {
-		await using testFixture = await createFixture({
-			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
-			'main.test.ts': 'import assert from \'node:assert/strict\';\nimport test from \'node:test\';\n\ntest(\'startup\', () => {\n\tassert.equal(1, 1);\n});\n',
-		});
+	await using testFixture = await createFixture({
+		...tsconfigForTree,
+		'package.json': JSON.stringify({ type: 'module' }),
+		'main.test.ts': 'import assert from \'node:assert/strict\';\nimport test from \'node:test\';\n\ntest(\'startup\', () => {\n\tassert.equal(1, 1);\n});\n',
+	});
 
-		await runPairedReport(
-			'node --test (forces fork on CLI)',
-			testFixture.path,
-			[localCliPath, '--test', 'main.test.ts'],
-			['--import', localLoaderPath, '--test', 'main.test.ts'],
-		);
-	}
+	await runPairedReport(
+		'node --test (forces fork on CLI)',
+		testFixture.path,
+		[localCliPath, '--test', 'main.test.ts'],
+		['--import', localLoaderPath, '--test', 'main.test.ts'],
+	);
 
 	await runPairedReport(
 		'Forced signal relay (fork path)',

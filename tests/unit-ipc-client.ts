@@ -6,7 +6,7 @@ import { createIpcServer } from '../src/utils/ipc/server';
 import { getPipePath } from '../src/utils/ipc/get-pipe-path';
 import { tmpdir } from '../src/utils/temporary-directory';
 
-const projectRoot = path.resolve(new URL('..', import.meta.url).pathname);
+const projectRoot = path.resolve(import.meta.dirname, '..');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
 const clientPath = path.join(projectRoot, 'src/utils/ipc/client.ts');
 
@@ -52,8 +52,8 @@ describe('IPC client', () => {
 
 		const childProcess = runClient(`
 			const { parent, connectingToServer } = await import(${JSON.stringify(clientPath)});
-			await connectingToServer;
 			parent.send?.({ type: 'dependency', path: '/real/child.ts' });
+			await connectingToServer;
 		`, { TSNODE_IPC: '1', TSNODE_DEPENDENCY_REPORTING: '1' });
 		const child = collect(childProcess);
 

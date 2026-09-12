@@ -1,12 +1,13 @@
 import { execFile } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { createProjectFixture } from './utils/fixture';
 
 const execFileAsync = promisify(execFile);
-const projectRoot = fileURLToPath(new URL('..', import.meta.url));
-const sourceResolveHookPath = fileURLToPath(new URL('./utils/source-resolve-hook.ts', import.meta.url));
+const projectRoot = path.resolve(import.meta.dirname, '..');
+const sourceResolveHookPath = path.join(import.meta.dirname, 'utils/source-resolve-hook.ts');
 const apiPath = (name: string) => pathToFileURL(`${projectRoot}/src/api/${name}.ts`).href;
 
 const runNode = async (script: string, cwd: string, env: Record<string, string> = {}) => {

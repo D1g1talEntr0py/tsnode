@@ -34,4 +34,17 @@ describe('hook load', () => {
 		const imported = await importFromSource(result.source as string);
 		expect(imported.color).toBe('red');
 	});
+
+	test('transforms fragmented URLs reported with the legacy TypeScript format', async () => {
+		const load = createLoadSync(createData({ tsconfig: false }));
+		const result = load(
+			'file:///project/module.ts#fragment',
+			{} as never,
+			(() => ({ format: 'typescript', source: 'export const answer: number = 42;' })) as never,
+		);
+
+		expect(result.format).toBe('module');
+		const imported = await importFromSource(result.source as string);
+		expect(imported.answer).toBe(42);
+	});
 });

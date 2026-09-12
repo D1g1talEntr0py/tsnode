@@ -1,11 +1,10 @@
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { createFixture } from 'fs-fixture';
 
-const projectRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
+const projectRoot = path.resolve(import.meta.dirname, '..');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
 const tsconfigForFixture = {

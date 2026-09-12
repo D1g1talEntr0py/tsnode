@@ -38,6 +38,18 @@ describe('tsconfig utilities', () => {
 		}
 	});
 
+	test('loadTsconfig rejects valid JSON with invalid compiler option shapes', () => {
+		const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-tsconfig-'));
+		const configPath = path.join(temporaryDirectory, 'wrong-shape.json');
+
+		try {
+			fs.writeFileSync(configPath, JSON.stringify({ compilerOptions: { paths: { '@app/*': 'src/*' } } }));
+			expect(loadTsconfig(configPath)).toBeUndefined();
+		} finally {
+			fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
 	test('resolveTsconfigPaths resolves exact aliases and wildcards', () => {
 		const resolved = resolveTsconfigPaths(
 			{

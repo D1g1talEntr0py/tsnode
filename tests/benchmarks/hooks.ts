@@ -37,7 +37,7 @@ const nextLoadJs: Parameters<LoadHookSync>[2] = () => ({
 });
 
 const nextLoadTs: Parameters<LoadHookSync>[2] = () => ({
-	format: 'typescript',
+	format: 'module-typescript',
 	source: 'export const value: number = 1;',
 	shortCircuit: true,
 });
