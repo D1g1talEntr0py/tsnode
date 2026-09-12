@@ -447,6 +447,12 @@ const api = register({ namespace: `tenant-${Date.now()}` });
 
 const moduleA = await api.import('./plugin.ts', import.meta.url);
 
+interface PluginModule {
+  activate(): void;
+}
+
+const plugin = await api.import<PluginModule>('./plugin.ts', import.meta.url);
+
 await api.unregister();
 ```
 
@@ -475,6 +481,19 @@ import { tsImport } from '@d1g1tal/tsnode/api';
 
 const loaded = await tsImport('./task.ts', import.meta.url);
 ```
+
+Without an explicit type argument, imports resolve to `ModuleNamespace` (`Record<string, unknown>`), so export values must be narrowed before use. Supply a module contract when it is known:
+
+```ts
+interface TaskModule {
+  run(): Promise<void>;
+}
+
+const { run } = await tsImport<TaskModule>('./task.ts', import.meta.url);
+await run();
+```
+
+The generic type is supplied by the caller and does not validate the loaded module at runtime. Validate exports separately when loading untrusted modules.
 
 Object form:
 
