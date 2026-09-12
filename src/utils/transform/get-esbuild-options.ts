@@ -1,29 +1,14 @@
 import path from 'node:path';
-import { Json, type JsonString } from '../json';
+import { Json } from '../json';
+import type { SourceMap, Transformed } from '../../types';
 import type { TransformOptions, TransformResult } from 'esbuild';
-
-/** Parsed esbuild source map (JSON of TransformResult['map']) */
-export type SourceMap = {
-	version: number;
-	sources: string[];
-	names: string[];
-	mappings: string;
-	sourcesContent?: string[];
-	sourceRoot?: string;
-	file?: string;
-};
-
-export type PatchedTransformResult = {
-	code: string;
-	map?: SourceMap;
-};
 
 export const baseConfig = Object.freeze({
 	target: `node${process.versions.node}`,
 	// "default" tells esbuild to infer loader from file name
 	// https://github.com/evanw/esbuild/blob/4a07b17adad23e40cbca7d2f8931e8fb81b47c33/internal/bundler/bundler.go#L158
 	loader: 'default'
-});
+} satisfies TransformOptions);
 
 // match Node.js debugger flags
 // https://nodejs.org/api/cli.html#--inspecthostport
@@ -63,7 +48,7 @@ export const cacheConfig = {
 	 * https://esbuild.github.io/try/#dAAwLjE5LjUAAGNvbnN0IGEgPSAxOwooZnVuY3Rpb24gYSgpIHt9KTs
 	 */
 	keepNames: true
-};
+} satisfies TransformOptions;
 
 const getPathname = (value: string) => {
 	const queryIndex = value.indexOf('?');
@@ -82,14 +67,15 @@ export const patchSourcefileOption = (options: TransformOptions) => {
 	return originalSourcefile;
 };
 
-export const patchTransformResult = (result: TransformResult, sourcefile: string | undefined, originalSourcefile: string | undefined): PatchedTransformResult => {
+export const patchTransformResult = (result: TransformResult, sourcefile: string | undefined, originalSourcefile: string | undefined): Transformed => {
 	let sourceMap: SourceMap | undefined;
 	if (result.map) {
 		if (sourcefile !== originalSourcefile) {
 			result.map = result.map.replace(Json.serialize(sourcefile), Json.serialize(originalSourcefile));
 		}
 
-		sourceMap = Json.parse(result.map as JsonString<SourceMap>);
+		// esbuild owns this JSON string and guarantees the source-map schema in TransformResult.
+		sourceMap = Json.parse(result.map) as SourceMap;
 	}
 
 	return { code: result.code, map: sourceMap };

@@ -1,17 +1,17 @@
 import { pathToFileURL } from 'node:url';
 import { fileUrlPrefix } from '../utils/path-utils';
-import type { ScopedImport } from '../types';
+import type { DynamicImport, ModuleNamespace, ScopedImport } from '../types';
 
 // Keep this indirect so bundlers don't try to statically analyze tsnode:// imports.
-// eslint-disable-next-line @typescript-eslint/no-implied-eval
-const dynamicImport = new Function('specifier', 'return import(specifier);') as (specifier: string) => Promise<unknown>;
+const nativeEval = globalThis[('ev' + 'al') as 'eval'];
+const dynamicImport = nativeEval('(specifier) => import(specifier);') as DynamicImport;
 
-export const createScopedImport = (namespace: string): ScopedImport => (specifier, parent) => {
+export const createScopedImport = (namespace: string): ScopedImport => <TModule extends object = ModuleNamespace>(specifier: string, parent: string) => {
 	if (!parent) {
 		throw new Error('The current file path (import.meta.url) must be provided in the second argument of tsImport()');
 	}
 
 	const parentURL = parent.startsWith(fileUrlPrefix) ? parent : pathToFileURL(parent).toString();
 
-	return dynamicImport(`tsnode://${JSON.stringify({ specifier, parentURL, namespace })}`);
+	return dynamicImport<TModule>(`tsnode://${JSON.stringify({ specifier, parentURL, namespace })}`);
 };

@@ -7,7 +7,10 @@ import path from 'node:path';
 const projectRoot = cwd();
 const packageJsonPath = path.join(projectRoot, 'package.json');
 const temporaryDeclarationDirectory = path.join(projectRoot, '.types-build');
-const packageJson = JSON.parse(await fsPromises.readFile(packageJsonPath, 'utf8'));
+const isRecord = (value: unknown): value is Record<string, unknown> => !Array.isArray(value) && typeof value === 'object' && value !== null;
+const parsedPackageJson: unknown = JSON.parse(await fsPromises.readFile(packageJsonPath, 'utf8'));
+if (!isRecord(parsedPackageJson)) { throw new TypeError('package.json must contain an object') }
+const packageJson = parsedPackageJson;
 const typeEntries = new Map<string, string>();
 
 const readTemporaryDeclaration = async (relativePath: string) => fsPromises.readFile(path.join(temporaryDeclarationDirectory, relativePath), 'utf8');
@@ -26,17 +29,46 @@ const extractTypeDeclaration = (source: string, name: string) => {
 	return source.slice(startIndex, nextIndex === -1 ? undefined : nextIndex).trimEnd();
 };
 
+const buildTypeDeclarations = (sharedTypesDeclaration: string, exportedTypeNames: string[]) => {
+	const allTypeNames = Array.from(sharedTypesDeclaration.matchAll(/^export type ([A-Za-z0-9_]+)(?:<[^\n]+>)? = /gm))
+		.map(([, typeName]) => typeName);
+	const declarationByTypeName = new Map(allTypeNames.map(typeName => [typeName, extractTypeDeclaration(sharedTypesDeclaration, typeName)]));
+	const exportedTypeNameSet = new Set(exportedTypeNames);
+	const includedTypeNameSet = new Set<string>();
+	const orderedTypeNames: string[] = [];
+
+	const includeWithDependencies = (typeName: string) => {
+		if (includedTypeNameSet.has(typeName)) { return }
+
+		const declaration = declarationByTypeName.get(typeName);
+		if (!declaration) { throw new Error(`Unable to find type declaration for ${typeName}`) }
+
+		for (const dependencyName of allTypeNames) {
+			if (dependencyName !== typeName && new RegExp(`\\b${dependencyName}\\b`).test(declaration)) {
+				includeWithDependencies(dependencyName);
+			}
+		}
+
+		includedTypeNameSet.add(typeName);
+		orderedTypeNames.push(typeName);
+	};
+
+	for (const exportedTypeName of exportedTypeNames) {
+		includeWithDependencies(exportedTypeName);
+	}
+
+	return orderedTypeNames.map((name) => {
+		const declaration = declarationByTypeName.get(name)!;
+		return exportedTypeNameSet.has(name) ? declaration : declaration.replace(/^export /, '');
+	});
+};
+
 const buildApiIndexDeclaration = async () => {
 	const [apiIndexDeclaration, registerDeclaration, sharedTypesDeclaration] = await Promise.all([
 		readTemporaryDeclaration(path.join('api', 'index.d.ts')),
 		readTemporaryDeclaration(path.join('api', 'register.d.ts')),
-		readTemporaryDeclaration('types.d.ts'),
+		readTemporaryDeclaration('types.d.ts')
 	]);
-
-	const optionsMatch = apiIndexDeclaration.match(/type Options = [\s\S]*?^};/m);
-	if (!optionsMatch) {
-		throw new Error('Unable to find api/index Options type declaration');
-	}
 
 	const registerDeclarations = registerDeclaration
 		.split('\n')
@@ -52,17 +84,19 @@ const buildApiIndexDeclaration = async () => {
 	}
 
 	const declarationSections = [
-		extractTypeDeclaration(sharedTypesDeclaration, 'TsconfigOptions').replace(/^export /, ''),
-		extractTypeDeclaration(sharedTypesDeclaration, 'RegisterOptions'),
-		extractTypeDeclaration(sharedTypesDeclaration, 'Unregister'),
-		extractTypeDeclaration(sharedTypesDeclaration, 'ScopedImport').replace(/^export /, ''),
-		extractTypeDeclaration(sharedTypesDeclaration, 'RegisterHandle'),
-		extractTypeDeclaration(sharedTypesDeclaration, 'NamespacedUnregister'),
-		extractTypeDeclaration(sharedTypesDeclaration, 'RequiredProperty').replace(/^export /, ''),
-		extractTypeDeclaration(sharedTypesDeclaration, 'Register'),
-		optionsMatch[0],
+		...buildTypeDeclarations(sharedTypesDeclaration, [
+			'ModuleNamespace',
+			'NamespacedUnregister',
+			'Register',
+			'RegisterHandle',
+			'RegisterOptions',
+			'ScopedImport',
+			'ModuleImport',
+			'TsImportOptions',
+			'Unregister'
+		]),
 		...registerDeclarations,
-		tsImportMatch[0],
+		tsImportMatch[0]
 	];
 
 	return `${declarationSections.join('\n\n')}\n`;
@@ -78,43 +112,15 @@ const buildLoaderDeclaration = async () => {
 		.split(',')
 		.map(name => name.trim())
 		.filter(Boolean);
-
-	const allTypeNames = Array.from(sharedTypesDeclaration.matchAll(/^export type ([A-Za-z0-9_]+)(?:<[^\n]+>)? = /gm))
-		.map(([, typeName]) => typeName);
-
-	const declarationByTypeName = new Map(allTypeNames.map(typeName => [typeName, extractTypeDeclaration(sharedTypesDeclaration, typeName)]));
-
-	const exportedTypeNameSet = new Set(exportedTypeNames);
-	const includedTypeNameSet = new Set<string>();
-	const orderedTypeNames: string[] = [];
-
-	const includeWithDependencies = (typeName: string) => {
-		if (includedTypeNameSet.has(typeName)) { return }
-
-		const declaration = declarationByTypeName.get(typeName);
-		if (!declaration) { throw new Error(`Unable to find type declaration for ${typeName}`) }
-
-		for (const dependencyName of allTypeNames) {
-			if (dependencyName === typeName) { continue }
-
-			const dependencyPattern = new RegExp(`\\b${dependencyName}\\b`);
-			if (dependencyPattern.test(declaration)) { includeWithDependencies(dependencyName) }
-		}
-
-		includedTypeNameSet.add(typeName);
-		orderedTypeNames.push(typeName);
-	};
-
-	for (const exportedTypeName of exportedTypeNames) {
-		includeWithDependencies(exportedTypeName);
-	}
-
-	const declarationSections = orderedTypeNames.map((name) => {
-		const declaration = declarationByTypeName.get(name)!;
-		return exportedTypeNameSet.has(name) ? declaration : declaration.replace(/^export /, '');
-	});
+	const declarationSections = buildTypeDeclarations(sharedTypesDeclaration, exportedTypeNames);
 
 	return `${declarationSections.join('\n\n')}\n`;
+};
+
+const validatePublicDeclaration = (relativePath: string, declaration: string) => {
+	if (/(?:from\s+|import\()['"]\.{1,2}\//.test(declaration)) {
+		throw new Error(`Declaration output ${relativePath} still references internal files and needs bundling support.`);
+	}
 };
 
 const writePublicDeclaration = async (sourcePath: string, outputPath: string) => {
@@ -122,20 +128,17 @@ const writePublicDeclaration = async (sourcePath: string, outputPath: string) =>
 	const temporaryOutputPath = path.join(temporaryDeclarationDirectory, relativePath);
 
 	await fsPromises.mkdir(path.dirname(outputPath), { recursive: true });
+	let declaration: string;
 
 	if (relativePath === path.join('api', 'index.d.ts')) {
-		return fsPromises.writeFile(outputPath, await buildApiIndexDeclaration());
+		declaration = await buildApiIndexDeclaration();
+	} else if (relativePath === 'loader.d.ts') {
+		declaration = await buildLoaderDeclaration();
+	} else {
+		declaration = await fsPromises.readFile(temporaryOutputPath, 'utf8');
 	}
 
-	if (relativePath === 'loader.d.ts') {
-		return fsPromises.writeFile(outputPath, await buildLoaderDeclaration());
-	}
-
-	const declaration = await fsPromises.readFile(temporaryOutputPath, 'utf8');
-	if (/from ['"]\.?\.?\//.test(declaration)) {
-		throw new Error(`Declaration output ${relativePath} still references internal files and needs bundling support.`);
-	}
-
+	validatePublicDeclaration(relativePath, declaration);
 	await fsPromises.writeFile(outputPath, declaration);
 };
 
@@ -164,7 +167,7 @@ const collectTypeTargets = (exportValue: unknown) => {
 
 addTypeEntry(packageJson.types);
 
-for (const exportValue of Object.values(packageJson.exports ?? {})) {
+for (const exportValue of Object.values(isRecord(packageJson.exports) ? packageJson.exports : {})) {
 	collectTypeTargets(exportValue);
 }
 
@@ -202,7 +205,7 @@ try {
 		'esnext',
 		'--types',
 		'node',
-		...typeEntries.keys(),
+		...typeEntries.keys()
 	]);
 
 	for (const [ sourcePath, outputPath ] of typeEntries) {

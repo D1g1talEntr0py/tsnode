@@ -64,6 +64,11 @@ const sharedLoad: LoadHookSync = (url, context, nextLoad) => {
 	return load(url, context);
 };
 
+/**
+ * Registers scoped loader hooks for the current process.
+ * @param options The options for registering the scoped hooks.
+ * @returns An object with an `import()` method for scoped imports and an `unregister()` method to remove the hooks.
+ */
 export const registerScoped = (options: RequiredProperty<RegisterOptions, 'namespace'>): NamespacedUnregister => {
 	if (shouldEnableSourceMaps) { process.setSourceMapsEnabled(true) }
 
@@ -91,19 +96,19 @@ export const registerScoped = (options: RequiredProperty<RegisterOptions, 'names
 };
 
 /**
- * Registers the ts-node loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
+ * Registers the tsnode loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
  * @param options Optional configuration for the loader hooks.
  * @returns An object with an `unregister()` method to remove the hooks, and if a namespace is provided, an `import()` method for scoped imports.
  */
 export function register(options: RequiredProperty<RegisterOptions, 'namespace'>): NamespacedUnregister;
 /**
- * Registers the ts-node loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
+ * Registers the tsnode loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
  * @param options Optional configuration for the loader hooks.
  * @returns An object with an `unregister()` method to remove the hooks.
  */
 export function register(options?: RegisterOptions): RegisterHandle;
 /**
- * Registers the ts-node loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
+ * Registers the tsnode loader hooks for the current process. Returns an object with an `unregister()` method to remove the hooks.
  * @param options Optional configuration for the loader hooks.
  * @returns An object with an `unregister()` method to remove the hooks, and if a namespace is provided, an `import()` method for scoped imports.
  */
