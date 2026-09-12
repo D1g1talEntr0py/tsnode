@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { chmod, unlink, mkdir, readdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
-import { Json, type JsonString } from '../json';
+import { Json, type JsonDecoder } from '../json';
 import { tmpdir, legacyTmpdirs } from '../temporary-directory';
-import type { Transformed } from './index';
+import type { Transformed } from '../../types';
 
 const noop = () => {};
 
@@ -65,9 +65,14 @@ export const forEachConcurrent = async <T>(values: T[], concurrency: number, tas
 		throw new RangeError(`Concurrency must be a positive integer, got ${concurrency}`);
 	}
 
-	let nextIndex = 0;
+	const iterator = values.values();
 	const worker = async () => {
-		while (nextIndex < values.length) { await task(values[nextIndex++]) }
+		while (true) {
+			const next = iterator.next();
+			if (next.done) { return }
+
+			await task(next.value);
+		}
 	};
 
 	await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
@@ -78,6 +83,7 @@ export const forEachConcurrent = async <T>(values: T[], concurrency: number, tas
  * Implements the `Cache<T>` interface.
  */
 class FileCache<T> implements Cache<T> {
+	readonly #decode: JsonDecoder<T>;
 	#memoryCache = new Map<string, T>();
 	/**
 	 * By using tmpdir, the expectation is for the OS to clean any files
@@ -107,6 +113,10 @@ class FileCache<T> implements Cache<T> {
 	#cacheDirectoryReadyPath: string | undefined;
 	#cacheDirectoryExists: boolean | undefined;
 	#maintenanceScheduled = false;
+
+	constructor(decoder: JsonDecoder<T>) {
+		this.#decode = decoder;
+	}
 
 	/**
 	 * Returns the cached value for the given key, or undefined if the key is not in the cache.
@@ -344,9 +354,12 @@ class FileCache<T> implements Cache<T> {
 		const filePath = this.#cacheFilePath(key);
 
 		try {
-			return Json.parse(readFileSync(filePath, 'utf8') as JsonString<T>);
+			const decoded = Json.decode(readFileSync(filePath, 'utf8'), this.#decode);
+			if (decoded === undefined) { throw new TypeError('Invalid cache entry') }
+
+			return decoded;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			if (!hasErrorCode(error, 'ENOENT')) {
 				unlink(filePath).catch(noop);
 			}
 
@@ -365,9 +378,12 @@ class FileCache<T> implements Cache<T> {
 		const filePath = this.#cacheFilePath(key);
 
 		try {
-			return Json.parse(await readFile(filePath, 'utf8') as JsonString<T>);
+			const decoded = Json.decode(await readFile(filePath, 'utf8'), this.#decode);
+			if (decoded === undefined) { throw new TypeError('Invalid cache entry') }
+
+			return decoded;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+			if (!hasErrorCode(error, 'ENOENT')) {
 				unlink(filePath).catch(noop);
 			}
 
@@ -477,4 +493,46 @@ class FileCache<T> implements Cache<T> {
 	}
 }
 
-export default (process.env['TSNODE_DISABLE_CACHE'] ? new Map<string, Transformed>() : new FileCache<Transformed>());
+const hasErrorCode = (error: unknown, code: string) => error !== null && typeof error === 'object' && 'code' in error && error.code === code;
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
+
+const isRecord = (value: unknown): value is Record<PropertyKey, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const decodeSourceMap = (value: unknown): Transformed['map'] => {
+	if (!isRecord(value)) { return undefined }
+
+	const version = value['version'];
+	const sources = value['sources'];
+	const names = value['names'];
+	const mappings = value['mappings'];
+	const sourcesContent = value['sourcesContent'];
+	const sourceRoot = value['sourceRoot'];
+	const file = value['file'];
+	if (typeof version !== 'number' || !isStringArray(sources) || !isStringArray(names) || typeof mappings !== 'string') { return undefined }
+	if (sourcesContent !== undefined && !isStringArray(sourcesContent)) { return undefined }
+	if (sourceRoot !== undefined && typeof sourceRoot !== 'string') { return undefined }
+	if (file !== undefined && typeof file !== 'string') { return undefined }
+
+	const sourceMap: NonNullable<Transformed['map']> = { version, sources, names, mappings };
+	if (sourcesContent !== undefined) { sourceMap.sourcesContent = sourcesContent }
+	if (sourceRoot !== undefined) { sourceMap.sourceRoot = sourceRoot }
+	if (file !== undefined) { sourceMap.file = file }
+
+	return sourceMap;
+};
+
+const decodeTransformed = (value: unknown): Transformed | undefined => {
+	if (!isRecord(value)) { return undefined }
+
+	const code = value['code'];
+	if (typeof code !== 'string') { return undefined }
+
+	const rawMap = value['map'];
+	if (rawMap === undefined) { return { code } }
+
+	const map = decodeSourceMap(rawMap);
+	return map ? { code, map } : undefined;
+};
+
+export default (process.env['TSNODE_DISABLE_CACHE'] ? new Map<string, Transformed>() : new FileCache(decodeTransformed));

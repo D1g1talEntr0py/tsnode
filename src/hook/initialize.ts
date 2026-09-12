@@ -1,33 +1,21 @@
 import { loadTsconfig } from '../utils/tsconfig';
-import type { RegisterOptions, TsconfigOptions } from '../types';
+import type { HookData, ParsedTsconfig, RegisterOptions } from '../types';
 
-type Data = {
-	active: boolean;
-	hasLoadedTsconfig: boolean;
-	namespace?: string;
-	onImport?: (url: string) => void;
-	virtualSources?: Map<string, string>;
-	parsedTsconfig: ReturnType<typeof loadTsconfig>;
-	tsconfig?: TsconfigOptions;
-};
-
-export type { Data };
-
-export const ensureParsedTsconfig = (data: Data) => {
+export const ensureParsedTsconfig = (data: HookData): ParsedTsconfig | undefined => {
 	if (data.tsconfig === false) {
 		data.hasLoadedTsconfig = true;
 		return undefined;
 	}
 
 	if (!data.hasLoadedTsconfig) {
-		data.parsedTsconfig = loadTsconfig(data.tsconfig ?? process.env?.['TSNODE_TSCONFIG_PATH']);
+		data.parsedTsconfig = loadTsconfig(data.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH']);
 		data.hasLoadedTsconfig = true;
 	}
 
 	return data.parsedTsconfig;
 };
 
-export const createData = (options?: RegisterOptions): Data => {
+export const createData = (options?: RegisterOptions): HookData => {
 	return {
 		active: true,
 		hasLoadedTsconfig: false,

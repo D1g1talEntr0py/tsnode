@@ -1,10 +1,7 @@
 import { getPipePath } from './get-pipe-path';
+import type { Parent, SendToParent } from '../../types';
 
-export type SendToParent = (data: Record<string, unknown>) => void;
-
-export type Parent = {
-	send: SendToParent | void;
-};
+export type { Parent, SendToParent } from '../../types';
 
 /**
  * Whether this process should connect to the parent's IPC socket at all.
@@ -20,21 +17,23 @@ const ipcEnabled = process.env['TSNODE_IPC'] === '1';
  */
 const dependencyReportingEnabled = process.env['TSNODE_DEPENDENCY_REPORTING'] === '1';
 
-let queuedMessages: Record<string, unknown>[] = [];
+let queuedMessages: Parameters<SendToParent>[0][] = [];
+const queueMessage: SendToParent = (data) => {
+	queuedMessages.push(data);
+};
 
 // `node:net` costs ~1ms to initialize and is only reachable when the parent enabled IPC, so it stays off the loader startup path.
-const connectToServer = async (): Promise<SendToParent | void> => {
+const connectToServer = async (): Promise<SendToParent | undefined> => {
 	const { default: net } = await import('node:net');
 
-	return new Promise<SendToParent | void>((resolve) => {
+	return new Promise<SendToParent | undefined>((resolve) => {
 		const socket = net.createConnection(getPipePath(process.ppid), () => {
-			const sendToParent: SendToParent = (data) => {
+			resolve((data) => {
 				const messageBuffer = Buffer.from(JSON.stringify(data));
 				const lengthBuffer = Buffer.alloc(4);
 				lengthBuffer.writeInt32BE(messageBuffer.length, 0);
 				socket.write(Buffer.concat([ lengthBuffer, messageBuffer ]));
-			};
-			resolve(sendToParent);
+			});
 		});
 
 		/**
@@ -42,18 +41,18 @@ const connectToServer = async (): Promise<SendToParent | void> => {
 		 * - Called as a loader and there is no server
 		 * - Nested process when using --test and the ppid is incorrect
 		 */
-		socket.on('error', () => resolve());
+		socket.on('error', () => resolve(undefined));
 
 		// Prevent Node from waiting for this socket to close before exiting
 		socket.unref();
 	});
 };
 
-export const parent: Parent = {
-	send: dependencyReportingEnabled ? (data) => queuedMessages.push(data) : undefined
-};
+export const parent = {
+	send: dependencyReportingEnabled ? queueMessage : undefined
+} satisfies Parent;
 
-export const connectingToServer = (ipcEnabled && process.env['TSNODE_SIGNAL_RELAY'] !== '0' ? connectToServer() : Promise.resolve());
+export const connectingToServer = (ipcEnabled && process.env['TSNODE_SIGNAL_RELAY'] !== '0' ? connectToServer() : Promise.resolve<undefined>(undefined));
 
 connectingToServer.then((send) => {
 	if (send && dependencyReportingEnabled) {

@@ -3,10 +3,9 @@ import { join } from 'node:path';
 import { cwd } from 'node:process';
 import { existsSync } from 'node:fs';
 import { rm, chmod, readFile, writeFile } from 'node:fs/promises';
+import packageJson from '../../package.json' with { type: 'json' };
 
 const projectRoot = cwd();
-const packageJsonPath = join(projectRoot, 'package.json');
-const packageJson: Record<string, unknown> = JSON.parse(await readFile(packageJsonPath, 'utf8'));
 const entryPoints = new Set<string>();
 
 const addEntryPointFromDistTarget = (target: string) => {
@@ -23,7 +22,7 @@ const addEntryPointFromDistTarget = (target: string) => {
 	}
 };
 
-const collectTargetsFromExportValue = (exportValue: string | string[] | object) => {
+const collectTargetsFromExportValue = (exportValue: unknown) => {
 	if (typeof exportValue === 'string') {
 		addEntryPointFromDistTarget(exportValue);
 		return;
@@ -36,19 +35,27 @@ const collectTargetsFromExportValue = (exportValue: string | string[] | object) 
 		return;
 	}
 
-	if (exportValue && typeof exportValue === 'object') {
+	if (exportValue !== null && typeof exportValue === 'object') {
 		for (const nestedValue of Object.values(exportValue)) {
 			collectTargetsFromExportValue(nestedValue);
 		}
 	}
 };
 
-for (const binTarget of Object.values(packageJson.bin ?? {})) {
-	addEntryPointFromDistTarget(binTarget);
+if (typeof packageJson.bin === 'string') {
+	addEntryPointFromDistTarget(packageJson.bin);
+} else if (typeof packageJson.bin === 'object') {
+	for (const binTarget of Object.values(packageJson.bin)) {
+		addEntryPointFromDistTarget(binTarget);
+	}
 }
 
-for (const exportValue of Object.values(packageJson.exports ?? {})) {
-	collectTargetsFromExportValue(exportValue);
+if (typeof packageJson.exports === 'string') {
+	addEntryPointFromDistTarget(packageJson.exports);
+} else if (packageJson.exports !== null && typeof packageJson.exports === 'object') {
+	for (const exportValue of Object.values(packageJson.exports)) {
+		collectTargetsFromExportValue(exportValue);
+	}
 }
 
 if (entryPoints.size === 0) {
@@ -63,14 +70,13 @@ await build({
 	outbase: join(projectRoot, 'src'),
 	platform: 'node',
 	format: 'esm',
-	target: 'node20',
+	target: 'node24',
 	bundle: true,
 	splitting: true,
-	// Only runtime dependencies stay external; everything else (including
-	// devDependencies imported by runtime code) must be bundled
-	external: ['esbuild', '@d1g1tal/watchr'],
+	// Only runtime dependencies stay external; everything else (including devDependencies imported by runtime code) must be bundled
+	external: [ 'esbuild', '@d1g1tal/watchr' ],
 	minify: true,
-	logLevel: 'info',
+	logLevel: 'info'
 });
 
 const cliOutputPath = join(projectRoot, 'dist', 'cli.js');

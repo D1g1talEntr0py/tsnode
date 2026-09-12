@@ -64,15 +64,17 @@ const ensureLoaderInheritedByChildren = () => {
  */
 export const runInProcess = async (argv: string[], resolvedEntrypointPath?: string) => {
 	const [ entry, ...scriptArgv ] = argv;
+	if (entry === undefined) { throw new TypeError('Missing entry path') }
+
 	const argvEntryPath = path.resolve(normalizeFileUrlPath(entry));
+	const executablePath = process.argv[0];
+	if (executablePath === undefined) { throw new TypeError('Missing executable path') }
 
 	// Present the argv shape the forked child would have had: the tsnode flags
 	// are already stripped, and argv[1] is the resolved entry.
-	process.argv = [ process.argv[0], argvEntryPath, ...scriptArgv ];
+	process.argv = [ executablePath, argvEntryPath, ...scriptArgv ];
 
 	ensureLoaderInheritedByChildren();
-
-	await import('./suppress-warnings');
 
 	(await import('./api/index')).register();
 

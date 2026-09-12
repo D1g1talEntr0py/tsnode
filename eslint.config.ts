@@ -14,11 +14,12 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 	languageOptions: {
 		parser: tslint.parser,
 		parserOptions: {
-			project: true,
 			ecmaFeatures: {	impliedStrict: true	},
 			tsconfigRootDir: import.meta.dirname,
-			allowAutomaticSingleRunInference: true,
-			warnOnUnsupportedTypeScriptVersion: false
+			projectService: {
+				allowDefaultProject: [ 'scripts/build/*.ts' ],
+				defaultProject: 'tsconfig.json'
+			}
 		}
 	},
 	settings: {
@@ -56,6 +57,7 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 		'@typescript-eslint/unbound-method': 'off',
 		'@typescript-eslint/restrict-template-expressions': 'off',
 		'@typescript-eslint/no-unsafe-enum-comparison': 'off',
+		'@typescript-eslint/no-unnecessary-type-assertion': 'error',
 		"@typescript-eslint/method-signature-style": ["error", "property"],
 		'@typescript-eslint/no-unused-vars': ['error', {
 			args: 'all',

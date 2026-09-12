@@ -18,16 +18,29 @@ type Brand<T, U> = U extends symbol ? T & { readonly [K in U]: true } : T & { re
 // JSON types
 export type JsonString<T> = Brand<string, T>;
 
+export type JsonDecoder<T> = (value: unknown) => T | undefined;
+
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
 /**
  * A utility class for JSON serialization and deserialization.
  */
 export class Json {
 	/**
-	 * Parse a JSON string into an object of type T.
+	 * Parse a JSON string without claiming a decoded shape.
 	 * @param jsonString The JSON string to parse.
 	 */
-	static parse<T>(jsonString: JsonString<T>) {
-		return JSON.parse(jsonString) as T;
+	static parse(jsonString: string): JsonValue {
+		return JSON.parse(jsonString) as JsonValue;
+	}
+
+	/**
+	 * Parse and decode a JSON string.
+	 * @param jsonString The JSON string to parse.
+	 * @param decoder Validates and converts the parsed value.
+	 */
+	static decode<T>(jsonString: string, decoder: JsonDecoder<T>): T | undefined {
+		return decoder(Json.parse(jsonString));
 	}
 
 	/**

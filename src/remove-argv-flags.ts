@@ -1,24 +1,23 @@
-export type FlagDefinition = {
-	type: BooleanConstructor | StringConstructor | NumberConstructor | [StringConstructor];
-	alias?: string;
-};
+import type { FlagDefinition, Flags } from './types';
 
-export type Flags = Record<string, FlagDefinition>;
+export type { FlagDefinition, Flags } from './types';
 
 const toCamelCase = (value: string) => value.replace(/-([a-z])/g, (_, character: string) => character.toUpperCase());
 
 const getFlagEntry = (flags: Flags, name: string) => {
-	if (name in flags) { return [ name, flags[name] ] as const }
+	const definition = flags[name];
+	if (definition) { return [ name, definition ] as const }
 
 	const camelName = toCamelCase(name);
+	const camelDefinition = flags[camelName];
 
-	return camelName in flags ? [ camelName, flags[camelName] ] as const : undefined;
+	return camelDefinition ? [ camelName, camelDefinition ] as const : undefined;
 };
 
 const getFlagByAlias = (flags: Flags, alias: string) => {
 	for (const name in flags) {
 		const definition = flags[name];
-		if (definition.alias === alias) { return [ name, definition ] as const }
+		if (definition?.alias === alias) { return [ name, definition ] as const }
 	}
 
 	return undefined;
@@ -35,6 +34,7 @@ const consumesValue = (definition: FlagDefinition) => definition.type !== Boolea
 export const findFirstPositionalIndex = (flags: Flags, argv: string[]) => {
 	for (let index = 0, length = argv.length; index < length; index += 1) {
 		const argument = argv[index];
+		if (argument === undefined) { return -1 }
 
 		if (argument === '--') { return index + 1 }
 
@@ -48,7 +48,8 @@ export const findFirstPositionalIndex = (flags: Flags, argv: string[]) => {
 		}
 
 		if (argument.startsWith('-') && argument.length === 2) {
-			const [ , definition ] = getFlagByAlias(flags, argument[1]) ?? [];
+			const alias = argument[1];
+			const definition = alias === undefined ? undefined : getFlagByAlias(flags, alias)?.[1];
 
 			if (definition && consumesValue(definition)) { index += 1 }
 
@@ -64,6 +65,7 @@ export const findFirstPositionalIndex = (flags: Flags, argv: string[]) => {
 export const removeArgvFlags = (flags: Flags, argv = process.argv.slice(2)) => {
 	for (let index = 0; index < argv.length;) {
 		const argument = argv[index];
+		if (argument === undefined) { break }
 
 		if (argument === '--' || !argument.startsWith('-') || argument === '-') { break }
 
@@ -74,7 +76,8 @@ export const removeArgvFlags = (flags: Flags, argv = process.argv.slice(2)) => {
 			const [ , definition ] = getFlagEntry(flags, name) ?? [];
 			if (definition) { removeCount = (inlineValue === undefined && consumesValue(definition)) ? 2 : 1 }
 		} else if (argument.length === 2) {
-			const [ , definition ] = getFlagByAlias(flags, argument[1]) ?? [];
+			const alias = argument[1];
+			const definition = alias === undefined ? undefined : getFlagByAlias(flags, alias)?.[1];
 			if (definition) { removeCount = consumesValue(definition) ? 2 : 1 }
 		}
 

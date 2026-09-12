@@ -5,17 +5,13 @@ import { parseArgs } from 'node:util';
 import { Watchr } from '@d1g1tal/watchr';
 import { lightMagenta, lightGreen, yellow } from '../utils/ansi';
 import { run } from '../run';
-import { findFirstPositionalIndex, removeArgvFlags, type Flags } from '../remove-argv-flags';
+import { findFirstPositionalIndex, removeArgvFlags } from '../remove-argv-flags';
 import { createIpcServer } from '../utils/ipc/server';
 import { clearScreen, log } from './utils';
 import type { ChildProcess } from 'node:child_process';
+import type { DependencyMessage, Flags } from '../types';
 
-type DependencyMessage = {
-	type: 'dependency';
-	path: string;
-};
-
-type WatchEventHandler = (event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void;
+type WatchEventHandler = NonNullable<ConstructorParameters<typeof Watchr>[2]>;
 
 const flags: Flags = {
 	noCache: { type: Boolean },
@@ -54,6 +50,7 @@ const isDependencyMessage = (data: unknown): data is DependencyMessage => (data 
 
 export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	const firstPositionalIndex = findFirstPositionalIndex(flags, commandArgv);
+	const scriptPath = commandArgv[firstPositionalIndex];
 	const leadingArgv = firstPositionalIndex === -1 ? commandArgv : commandArgv.slice(0, firstPositionalIndex);
 
 	const { values } = parseArgs({
@@ -75,7 +72,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 		return;
 	}
 
-	if (firstPositionalIndex === -1) {
+	if (firstPositionalIndex === -1 || scriptPath === undefined) {
 		process.stderr.write('Error: Missing required parameter "script path"\n');
 		process.exitCode = 1;
 		return;
@@ -95,7 +92,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 	// [ scriptPath, ...options.include ] are the initial watch targets. If any of those files are deleted, the watcher will stop watching them.
 	// However, if the script imports other files, those will be watched as well (see onWatchEvent).
-	const watchTargets = [ commandArgv.slice(firstPositionalIndex)[0], ...options.include ].map(targetMapper);
+	const watchTargets = [ scriptPath, ...options.include ].map(targetMapper);
 
 	const isIgnoredPath = (targetPath: string) => {
 		const normalizedPath = normalizePath(targetPath);
@@ -131,7 +128,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	let reRun: (event?: string, filePath?: string) => void | Promise<void> = () => {};
 
 	const server = await createIpcServer();
-	const onWatchEvent: WatchEventHandler = (event: string, _stats: unknown, targetPath: string, targetPathNext?: string) => {
+	const onWatchEvent: WatchEventHandler = (event, _stats, targetPath, targetPathNext) => {
 		const changedPath = targetPathNext ?? targetPath;
 		const relativePath = relative(cwd, changedPath);
 
@@ -140,7 +137,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	const watchrOptions = { ignoreInitial: true, ignore: isIgnoredPath, recursive: true, debounce: 100 };
 	const watcher = new Watchr(watchTargets, watchrOptions, onWatchEvent);
 
-	server.on('data', (data) => {
+	server.on('data', (data: unknown) => {
 		// Collect run-time dependencies to watch
 		if (isDependencyMessage(data)) {
 			const dependencyPath = data.path.startsWith('file:') ? fileURLToPath(data.path) : data.path;
@@ -213,7 +210,7 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 		try {
 			if (waitingChildExit) {
 				log(reason, yellow('Process hasn\'t exited. Killing process...'));
-				runProcess!.kill('SIGKILL');
+				runProcess?.kill('SIGKILL');
 				return;
 			}
 

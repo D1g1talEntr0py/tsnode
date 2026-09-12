@@ -1,22 +1,23 @@
 import { fileURLToPath } from 'node:url';
 import { parent } from '../utils/ipc/client';
-import { ensureParsedTsconfig, type Data } from './initialize';
+import { ensureParsedTsconfig } from './initialize';
 import { getTsconfigCacheKey } from '../utils/tsconfig';
 import { logEsm as log, debugEnabled } from '../utils/debug';
-import { transformSync, stripTypes, type Transformed } from '../utils/transform';
+import { transformSync, stripTypes } from '../utils/transform';
 import { isJsonPattern, tsExtensionsPattern, fileUrlPrefix } from '../utils/path-utils';
 import { getNamespace, namespaceQuery, canTryNativeTypeStripping } from './utils';
-import type { LoadHook, LoadHookSync } from 'node:module';
+import type { HookData, Transformed } from '../types';
+import type { LoadHookSync } from 'node:module';
 
-type LoadResult = Awaited<ReturnType<LoadHook>> & {	responseURL?: string };
+type LoadResult = ReturnType<LoadHookSync> & { responseURL?: string };
 
 const inlineSourceMapPrefix = '\n//# sourceMappingURL=data:application/json;base64,';
 
 // Type-stripped results have no map: positions are preserved by whitespace
 const toModuleSource = ({ code, map }: Transformed) => map ? code + inlineSourceMapPrefix + Buffer.from(JSON.stringify(map), 'utf8').toString('base64') : code;
 const isModuleTypeScriptFormat = (format: string | null | undefined) => format === 'module-typescript' || format === 'typescript';
-const getTsconfigRaw = (hookData: Data) => ensureParsedTsconfig(hookData);
-const getTsconfigHash = (hookData: Data) => hookData.tsconfig === false ? undefined : getTsconfigCacheKey(hookData.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH']);
+const getTsconfigRaw = (hookData: HookData) => ensureParsedTsconfig(hookData);
+const getTsconfigHash = (hookData: HookData) => hookData.tsconfig === false ? undefined : getTsconfigCacheKey(hookData.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH']);
 const getFilePath = (url: string) => url.startsWith(fileUrlPrefix) ? fileURLToPath(url) : url;
 
 // nextLoad() can return ArrayBuffer/TypedArray source; Node decodes text
@@ -28,12 +29,13 @@ const decoratorLinePattern = /^\s*@/m;
 const hasDecorators = (code: string) => code.includes('@') && decoratorLinePattern.test(code);
 const nonErasableSyntaxPattern = /(?:^|[^\w$])(?:enum|namespace)\s+[\w$]/m;
 const hasNonErasableSyntax = (code: string) => (code.includes('enum') || code.includes('namespace')) && nonErasableSyntaxPattern.test(code);
+const getErrorCode = (error: unknown) => error !== null && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 
 const tryStripTypes = (code: string) => {
 	try {
 		return stripTypes(code);
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX') {
+		if (getErrorCode(error) === 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX') {
 			return;
 		}
 
@@ -41,7 +43,7 @@ const tryStripTypes = (code: string) => {
 	}
 };
 
-const notifyLoad = (hookData: Data,	url: string) => {
+const notifyLoad = (hookData: HookData,	url: string) => {
 	// URL parsing is only needed to strip the namespace query; skip it in
 	// the common case where no namespace is present
 	let cleanUrl = url;
@@ -56,7 +58,7 @@ const notifyLoad = (hookData: Data,	url: string) => {
 	return cleanUrl;
 };
 
-const prepareJsonAttributes = (url: string, context: Parameters<LoadHook>[1]) => {
+const prepareJsonAttributes = (url: string, context: Parameters<LoadHookSync>[1]) => {
 	if (!isJsonPattern.test(url)) { return context }
 
 	const contextAttributes = context.importAttributes;
@@ -65,7 +67,7 @@ const prepareJsonAttributes = (url: string, context: Parameters<LoadHook>[1]) =>
 	return { ...context, importAttributes: { ...contextAttributes, type: 'json' } };
 };
 
-export const createLoadSync = (hookData: Data): LoadHookSync => {
+export const createLoadSync = (hookData: HookData): LoadHookSync => {
 	const load: LoadHookSync = (url,	context, nextLoad) => {
 		if (!hookData.active || (hookData.namespace !== getNamespace(url))) { return nextLoad(url, context) }
 

@@ -4,17 +4,19 @@ if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
 }
 
-await import('./suppress-warnings');
 (await import('./api/index')).register();
 
 export type {
+	ModuleNamespace,
 	NamespacedUnregister,
 	NodeError,
 	Register,
 	RegisterHandle,
 	RegisterOptions,
 	ScopedImport,
+	ModuleImport,
+	TsImportOptions,
 	TsconfigOptions,
-	TsnodeRequest,
+	ModuleRequest,
 	Unregister
 } from './types';

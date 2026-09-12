@@ -1,4 +1,5 @@
 import { spawn, type StdioOptions } from 'node:child_process';
+import type { RunOptions } from './types';
 
 const shouldPatchRepl = (argv: string[]) => {
 	for (const flag of argv) {
@@ -8,7 +9,7 @@ const shouldPatchRepl = (argv: string[]) => {
 	return true;
 };
 
-export const run = (argv: string[], options?: { noCache?: boolean, signalRelay?: boolean, tsconfigPath?: string, ipc?: boolean }) => {
+export const run = (argv: string[], options?: RunOptions) => {
 	// [ stdin, stdout, stderr, ipc? ]
 	const stdio: StdioOptions = [ 'inherit', 'inherit', 'inherit' ];
 	const spawnEnv = { ...process.env };

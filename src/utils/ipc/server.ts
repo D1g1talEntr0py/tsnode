@@ -97,7 +97,10 @@ const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
 export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 	const server = createServer((socket) => {
 		socket.on('data', bufferData((message: Buffer) => {
-			try { server.emit('data', JSON.parse(message.toString())) } catch { /* Ignore malformed frames and keep the connection available for later messages. */ }
+			try {
+				const parsedMessage: unknown = JSON.parse(message.toString());
+				server.emit('data', parsedMessage);
+			} catch { /* Ignore malformed frames and keep the connection available for later messages. */ }
 		}, () => socket.destroy()));
 	});
 

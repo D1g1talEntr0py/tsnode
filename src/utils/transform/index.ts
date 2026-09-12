@@ -1,20 +1,20 @@
 import { createRequire, stripTypeScriptTypes } from 'node:module';
 import path from 'node:path';
 import cache from './cache';
-import { cacheConfig, patchSourcefileOption, patchTransformResult, type SourceMap } from './get-esbuild-options';
-import type { TransformOptions, TransformFailure } from 'esbuild';
+import { cacheConfig, patchSourcefileOption, patchTransformResult } from './get-esbuild-options';
+import type { Transformed } from '../../types';
+import type { TransformOptions } from 'esbuild';
 
 type CachedTransformOptions = TransformOptions & {
-	tsconfigHash?: string;
+	tsconfigHash?: string | undefined;
 	getTsconfigRaw?: () => TransformOptions['tsconfigRaw'];
 };
 
 type EsbuildModule = typeof import('esbuild');
 
-export type Transformed = {
-	code: string;
-	// Absent for natively type-stripped results: stripping replaces types with whitespace, so positions are preserved and no map is needed
-	map?: SourceMap;
+type MutableTransformFailure = Error & {
+	errors?: unknown[];
+	warnings?: unknown[];
 };
 
 let loadModule: NodeJS.Require | undefined;
@@ -30,12 +30,10 @@ let esbuildModule: EsbuildModule | undefined;
 
 const getEsbuildModuleSync = () => esbuildModule ?? (esbuildModule = getLoadModule()('esbuild') as EsbuildModule);
 
-const isTransformFailure = (error: unknown): error is TransformFailure => {
+const isTransformFailure = (error: unknown): error is MutableTransformFailure => {
 	if (error === null || typeof error !== 'object') { return false }
 
-	const maybeError = error as TransformFailure;
-
-	return 'errors' in maybeError && Array.isArray(maybeError.errors) && 'warnings' in maybeError && Array.isArray(maybeError.warnings);
+	return error instanceof Error && 'errors' in error && Array.isArray(error.errors) && 'warnings' in error && Array.isArray(error.warnings);
 };
 
 // tsconfigRaw is a stable object reference per project but can be large; cache its serialization instead of re-stringifying per transformed file
@@ -96,6 +94,17 @@ const baseHashOptions = stringifyStable({ ...cacheConfig, format: 'esm' });
 // The stripper (amaro) ships with Node, so its output is tied to the Node version
 const stripVersionSalt = `-strip-${process.versions.node}`;
 
+const stripTypeScriptTypesQuietly = (code: string) => {
+	const emitWarning = process.emitWarning;
+	process.emitWarning = () => {};
+
+	try {
+		return stripTypeScriptTypes(code, { mode: 'strip' });
+	} finally {
+		process.emitWarning = emitWarning;
+	}
+};
+
 /**
  * Type stripping via Node's built-in stripper. Output is disk-cached so
  * warm runs skip amaro's WASM initialization entirely. Output doesn't
@@ -109,7 +118,7 @@ export const stripTypes = (code: string): Transformed => {
 	let stripped = cache.get(hash);
 
 	if (!stripped) {
-		stripped = { code: stripTypeScriptTypes(code, { mode: 'strip' }) };
+		stripped = { code: stripTypeScriptTypesQuietly(code) };
 		cache.set(hash, stripped);
 	}
 
@@ -145,13 +154,16 @@ const needsSourcefilePatch = (sourcefile: string | undefined) => !sourcefile ? f
 
 export const transformSync = (code: string, filePath: string, extendOptions?: CachedTransformOptions): Transformed => {
 	const { tsconfigHash, getTsconfigRaw, ...esbuildExtendOptions } = extendOptions ?? {};
-	const esbuildOptions = { ...cacheConfig, format: 'esm', sourcefile: filePath, ...esbuildExtendOptions } as TransformOptions;
+	const esbuildOptions: TransformOptions = { ...cacheConfig, format: 'esm', sourcefile: filePath, ...esbuildExtendOptions };
 	const originalSourcefile = needsSourcefilePatch(esbuildOptions.sourcefile) ? patchSourcefileOption(esbuildOptions) : esbuildOptions.sourcefile;
 
 	// Only call getTsconfigRaw now if tsconfigHash is absent — we need tsconfigRaw to compute the hash.
 	// When tsconfigHash is provided it stands in for the tsconfig content in the hash, so we can
 	// defer the (potentially expensive) getTsconfigRaw call until we confirm a cache miss.
-	if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined && !tsconfigHash) { esbuildOptions.tsconfigRaw = getTsconfigRaw() }
+	if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined && !tsconfigHash) {
+		const tsconfigRaw = getTsconfigRaw();
+		if (tsconfigRaw !== undefined) { esbuildOptions.tsconfigRaw = tsconfigRaw }
+	}
 
 	const hashOptionsString = hasCustomHashOptions(extendOptions) ? stringifyStable({ ...esbuildOptions, sourcefile: undefined, tsconfigRaw: undefined }) : baseHashOptions;
 
@@ -160,7 +172,10 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 
 	if (!transformed) {
 		// Cache miss — call getTsconfigRaw if it was deferred above
-		if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined) { esbuildOptions.tsconfigRaw = getTsconfigRaw() }
+		if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined) {
+			const tsconfigRaw = getTsconfigRaw();
+			if (tsconfigRaw !== undefined) { esbuildOptions.tsconfigRaw = tsconfigRaw }
+		}
 
 		let result;
 
@@ -169,9 +184,7 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 		} catch (error) {
 			if (isTransformFailure(error)) {
 				error.name = 'TransformError';
-				// @ts-expect-error deleting non-option property
 				delete error.errors;
-				// @ts-expect-error deleting non-option property
 				delete error.warnings;
 			}
 

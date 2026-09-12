@@ -1,22 +1,31 @@
 import { constants } from 'node:os';
 import { enableCompileCache } from 'node:module';
 import type { Server } from 'node:net';
-import type { Flags } from './remove-argv-flags';
+import type { Flags } from './types';
 import type { ParseArgsOptionsConfig } from 'node:util';
 import type { ChildProcess, Serializable } from 'node:child_process';
 import { normalizeFileUrlPath, resolveEntrypointPath, entryUsesImportMetaMain } from './utils/path-utils';
 
-type RunInProcess = (code: string, scriptArgv: string[]) => Promise<void>;
+type RunInProcess = typeof import('./run-eval-in-process')['runEvalInProcess'];
 
-if (typeof enableCompileCache === 'function' && process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
+if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
 }
 
 const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 	let waitForSignal: ((signal: NodeJS.Signals) => void) | undefined;
+	const isSignalMessage = (data: unknown): data is { type: 'signal', signal: NodeJS.Signals } => (
+		data !== null
+		&& typeof data === 'object'
+		&& 'type' in data
+		&& data.type === 'signal'
+		&& 'signal' in data
+		&& typeof data.signal === 'string'
+		&& Object.hasOwn(constants.signals, data.signal)
+	);
 
-	ipcSocket.on('data', (data: { type: string, signal: NodeJS.Signals }) => {
-		if (data?.type === 'signal' && waitForSignal) { waitForSignal(data.signal) }
+	ipcSocket.on('data', (data: unknown) => {
+		if (isSignalMessage(data) && waitForSignal) { waitForSignal(data.signal) }
 	});
 
 	/**
@@ -103,22 +112,31 @@ const RUNTIME_EQUIVALENT_FLAG_ENV = {
 	'--enable-source-maps': 'TSNODE_SOURCE_MAPS'
 } satisfies Record<string, string>;
 
+type RuntimeEquivalentFlag = keyof typeof RUNTIME_EQUIVALENT_FLAG_ENV;
+
+const isRuntimeEquivalentFlag = (flag: string): flag is RuntimeEquivalentFlag => Object.hasOwn(RUNTIME_EQUIVALENT_FLAG_ENV, flag);
+
 const extractRuntimeEquivalentLeadingFlags = (argv: string[]) => {
+	let flags: RuntimeEquivalentFlag[] | undefined;
 	let index = 0;
-	while (index < argv.length && argv[index].startsWith('-')) {
-		if (argv[index] === '--') {
-			return index > 0 ? { flags: argv.slice(0, index), rest: argv.slice(index + 1) } : undefined;
+	while (index < argv.length) {
+		const argument = argv[index];
+		if (argument === undefined || !argument.startsWith('-')) { break }
+
+		if (argument === '--') {
+			return flags ? { flags, rest: argv.slice(index + 1) } : undefined;
 		}
 
-		if (!(argv[index] in RUNTIME_EQUIVALENT_FLAG_ENV)) { return undefined }
+		if (!isRuntimeEquivalentFlag(argument)) { return undefined }
+		(flags ??= []).push(argument);
 		index += 1;
 	}
 
-	return index > 0 ? { flags: argv.slice(0, index), rest: argv.slice(index) } : undefined;
+	return flags ? { flags, rest: argv.slice(index) } : undefined;
 };
 
-const applyRuntimeEquivalentFlags = (flags: string[]) => {
-	for (const flag of flags) { process.env[RUNTIME_EQUIVALENT_FLAG_ENV[flag as keyof typeof RUNTIME_EQUIVALENT_FLAG_ENV]] = '1' }
+const applyRuntimeEquivalentFlags = (flags: RuntimeEquivalentFlag[]) => {
+	for (const flag of flags) { process.env[RUNTIME_EQUIVALENT_FLAG_ENV[flag]] = '1' }
 };
 
 const topLevelFlags = {
@@ -152,10 +170,36 @@ type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {
 
 type ParsedCliValues = CliValuesFromParseOptions<typeof parseArgOptions>;
 
+type RawCliValues = Record<string, string | boolean | (string | boolean)[] | undefined>;
+
+const normalizeCliValues = (rawValues: RawCliValues): ParsedCliValues => {
+	const values: ParsedCliValues = {};
+	const normalizeString = (name: string) => {
+		const value = rawValues[name];
+		if (value === undefined) { return undefined }
+		if (typeof value !== 'string') { throw new TypeError(`Option --${name} requires a string value`) }
+
+		return value;
+	};
+
+	for (const name of [ 'no-cache', 'version', 'help', 'test' ] as const) {
+		const value = rawValues[name];
+		if (typeof value === 'boolean') { values[name] = value }
+	}
+
+	for (const name of [ 'tsconfig', 'input-type', 'eval', 'print' ] as const) {
+		const value = normalizeString(name);
+		if (value !== undefined) { values[name] = value }
+	}
+
+	return values;
+};
+
 const parseCliValues = async (args: string[]) => {
 	const { parseArgs } = await import('node:util');
+	const { values } = parseArgs({ args, allowPositionals: true, strict: false, options: parseArgOptions });
 
-	return parseArgs({ args, allowPositionals: true, strict: false, options: parseArgOptions }).values as ParsedCliValues;
+	return normalizeCliValues(values);
 };
 
 type EvalType = Extract<keyof ParsedCliValues, 'eval' | 'print'>;
@@ -244,7 +288,7 @@ if (rawArgv[0] === 'watch') {
 
 	/**
 	 * The following conditions must be met to run in-process:
-	 * - ts-node is not disabled via TSNODE_DISABLE_IN_PROCESS
+	 * - tsnode is not disabled via TSNODE_DISABLE_IN_PROCESS
 	 * - No top-level flags that require a fork (version, help)
 	 * - No eval/print flags that rewrite argv into flags that must be set at bootstrap
 	 * - No test flag that rewrites argv into a glob that must be set at bootstrap

@@ -6,7 +6,7 @@ import type { ProcessEventMap } from 'node:process';
 type BaseEventListener = () => void;
 type SignalListener<S extends NodeJS.Signals = NodeJS.Signals> = (signal: ProcessEventMap[S][0]) => void;
 
-if (typeof enableCompileCache === 'function' && process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
+if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
 }
 
@@ -55,7 +55,6 @@ const bindHiddenSignalsHandler = (signals: NodeJS.Signals[], handler: SignalList
 	};
 };
 
-await import('./suppress-warnings');
 const { connectingToServer } = await import('./utils/ipc/client');
 
 // Worker threads inherit preloads; signal relay only belongs in the CLI child main thread.
