@@ -186,9 +186,8 @@ describe('transform cache', () => {
 
 		expect(cache.get(key)).toBeUndefined();
 
-		// Unlink is fire-and-forget; give it a turn to land.
-		await settle();
-		expect(fs.existsSync(filePath)).toBe(false);
+		// Unlink is fire-and-forget; poll instead of a fixed turn count, which is flaky under CI load.
+		await expect.poll(() => fs.existsSync(filePath), { timeout: 1_000 }).toBe(false);
 	});
 
 	test('drops valid JSON with the wrong transform shape', async () => {
@@ -198,8 +197,7 @@ describe('transform cache', () => {
 		fs.writeFileSync(filePath, JSON.stringify({ output: 'export {}' }));
 
 		expect(cache.get(key)).toBeUndefined();
-		await settle();
-		expect(fs.existsSync(filePath)).toBe(false);
+		await expect.poll(() => fs.existsSync(filePath), { timeout: 1_000 }).toBe(false);
 	});
 
 	test('recovers a corrupted disk entry when it is replaced', async () => {
