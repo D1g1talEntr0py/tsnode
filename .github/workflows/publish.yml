@@ -9,14 +9,17 @@ on:
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
   id-token: write
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
 
 jobs:
   release:
     if: >
-      github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -29,63 +32,105 @@ jobs:
         with:
           node-version: 'lts/*'
           cache: pnpm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.14.2
       - run: pnpm install --frozen-lockfile
-      - id: semantic_release
-        run: npx -y -p semantic-release -p @semantic-release/changelog -p @semantic-release/git -p @semantic-release/exec semantic-release
-        continue-on-error: true
+      - id: eligibility
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const latestTag = execFileSync('git', ['describe', '--tags', '--match', 'v[0-9]*', '--abbrev=0'], { encoding: 'utf8' }).trim();
+          const rawCommits = execFileSync('git', ['log', `${latestTag}..HEAD`, '--format=%B%x00'], { encoding: 'utf8' });
+          const commits = rawCommits.split('\0').map((message) => message.replace(/^\r?\n/, '').trim()).filter(Boolean);
+          const conventionalHeader = /^([a-z][a-z0-9-]*)(?:\([^\r\n)]*\))?(!)?: .+/;
+          let bump = '';
+
+          for (const commit of commits) {
+            const lines = commit.split(/\r?\n/);
+            const header = conventionalHeader.exec(lines[0]);
+            if (!header) continue;
+
+            const [, type, breakingMarker] = header;
+            const breakingFooter = lines.some((line) => /^BREAKING(?: |-)CHANGE:\s*\S/.test(line));
+            if (breakingMarker || breakingFooter) {
+              bump = 'major';
+            } else if (type === 'feat' && bump !== 'major') {
+              bump = 'minor';
+            } else if (['fix', 'perf', 'revert'].includes(type) && !['major', 'minor'].includes(bump)) {
+              bump = 'patch';
+            }
+          }
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `eligible=${Boolean(bump)}\nbump=${bump}\n`);
+          console.log(bump ? `Release eligible: ${bump}` : 'No release-triggering commits since the latest tag.');
+          NODE
+      - id: version
+        if: steps.eligibility.outputs.eligible == 'true'
+        run: |
+          BUMP_LOG=$(mktemp)
+          trap 'rm -f "$BUMP_LOG"' EXIT
+          set +e
+          BUMPED_VERSION=$(git cliff --github-repo "$GITHUB_REPOSITORY" --bumped-version 2>"$BUMP_LOG")
+          BUMP_STATUS=$?
+          set -e
+          cat "$BUMP_LOG" >&2
+
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          VERSION=${BUMPED_VERSION#v}
+          if [[ "$BUMP_STATUS" -ne 0 || -z "$VERSION" || "$VERSION" == "$CURRENT_VERSION" ]]; then
+            if [[ "${{ steps.eligibility.outputs.bump }}" == "patch" ]]; then
+              echo "git-cliff did not produce a new version; applying the eligible patch bump."
+              npm version patch --no-git-tag-version
+              VERSION=$(node -p "require('./package.json').version")
+            else
+              echo "git-cliff failed to produce the expected version bump."
+              exit 1
+            fi
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version from git-cliff: $VERSION"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Generate release notes and full changelog
+        if: steps.eligibility.outputs.eligible == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: backfill_release
-        if: always()
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const { execSync } = require('node:child_process');
-
-            let tag;
-            try {
-              tag = execSync('git describe --tags --abbrev=0', { encoding: 'utf8' }).trim();
-            } catch {
-              core.info('No tags are present yet. Skipping release backfill.');
-              core.setOutput('created', 'false');
-              return;
-            }
-
-            core.info(`Latest tag at/behind HEAD: ${tag}`);
-
-            try {
-              await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag,
-              });
-
-              core.info(`Release for ${tag} already exists.`);
-              core.setOutput('created', 'false');
-              return;
-            } catch (error) {
-              if (error.status !== 404) {
-                throw error;
-              }
-            }
-
-            core.warning(`Release for ${tag} is missing. Creating it now.`);
-
-            await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: tag,
-              generate_release_notes: true,
-              draft: false,
-              prerelease: false,
-            });
-
-            core.setOutput('created', 'true');
-
-      - name: Fail when semantic-release failed without recovery
-        if: steps.semantic_release.outcome == 'failure' && steps.backfill_release.outputs.created != 'true'
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          echo "semantic-release failed and no missing GitHub release was recovered."
-          exit 1
+          git cliff --github-repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --unreleased --strip header --output /tmp/release-notes.md
+          git cliff --github-repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --output CHANGELOG.md
+          npm version "$VERSION" --no-git-tag-version
+      - name: Validate and build package
+        if: steps.eligibility.outputs.eligible == 'true'
+        run: |
+          pnpm lint
+          pnpm type-check
+          pnpm test:coverage
+          pnpm build
+          pnpm pack
+      - name: Publish package
+        if: steps.eligibility.outputs.eligible == 'true'
+        run: pnpm publish --no-git-checks --provenance
+      - name: Commit changelog and package version
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add CHANGELOG.md package.json
+          git commit -m "chore(release): $VERSION [skip ci]"
+          git tag "v$VERSION"
+          git push origin HEAD:main "v$VERSION"
+      - name: Create GitHub release
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "v$VERSION" --title "v$VERSION" --notes-file /tmp/release-notes.md "d1g1tal-tsnode-$VERSION.tgz"
