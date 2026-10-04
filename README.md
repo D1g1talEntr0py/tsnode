@@ -45,6 +45,7 @@ Forked from [tsx](https://github.com/privatenumber/tsx) by [Hiroki Osame](https:
 - [FAQ](#faq)
 - [What was removed from tsx](#what-was-removed-from-tsx)
 - [Requirements](#requirements)
+- [Contributing and releases](#contributing-and-releases)
 - [License and attribution](#license-and-attribution)
 
 ## What tsnode is
@@ -681,6 +682,12 @@ TypeScript runtime details:
 - no local `typescript` package is required at runtime
 - transforms are handled by esbuild (with native stripping where available)
 - contributors to this repository use TypeScript 6.x for type-checking
+
+## Contributing and releases
+
+Use Conventional Commit messages. `feat` triggers a minor release; `fix`, `perf`, and `revert` trigger a patch release; a `!` marker or `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer triggers a major release. Other commit types do not trigger releases on their own, but every commit is included in the full changelog generated at release time.
+
+The publish workflow runs validation, publishes with npm provenance, commits the generated changelog and package version, then tags the release. Do not manually update the package version or publish as part of ordinary contributions.
 
 ## License and attribution
 

@@ -59,6 +59,12 @@ If full validation is not run, explicitly state what was skipped.
 - Public API or CLI behavior changes are allowed when they clearly improve correctness, maintainability, or performance; call out the behavior change explicitly.
 - For ambiguous requests that could alter performance methodology or runtime guarantees, ask one focused clarification question before broad changes.
 
+## Releases
+
+- Use Conventional Commit messages; `feat` triggers minor, `fix`/`perf`/`revert` trigger patch, and `!` or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer triggers major.
+- Other commit types do not independently release, but must remain included in `cliff.toml` changelog output.
+- The publish workflow owns package version changes, changelog generation, npm publishing with provenance, and release tags. Do not add release tooling to `package.json` or manually publish during normal changes.
+
 ## Code Review Instructions
 
 - Focus on correctness, maintainability, and performance impact.
