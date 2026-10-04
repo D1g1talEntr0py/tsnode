@@ -2,7 +2,7 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"skipLibCheck": true,
-		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
 		"resolveJsonModule": true,
 		"forceConsistentCasingInFileNames": true,
 		"noImplicitOverride": true,
