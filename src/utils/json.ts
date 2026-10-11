@@ -30,8 +30,8 @@ export class Json {
 	 * Parse a JSON string without claiming a decoded shape.
 	 * @param jsonString The JSON string to parse.
 	 */
-	static parse(jsonString: string): JsonValue {
-		return JSON.parse(jsonString) as JsonValue;
+	static parse<T = JsonValue>(jsonString: string): T {
+		return JSON.parse(jsonString) as T;
 	}
 
 	/**
