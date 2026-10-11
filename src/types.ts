@@ -1,3 +1,6 @@
+import type { TsconfigRaw } from 'esbuild';
+import type { TsConfigJson } from './utils/tsconfig-parser';
+
 export type NodeError = Error & {
 	code: string;
 	url?: string;
@@ -68,6 +71,13 @@ export type ParsedTsconfig = {
 		allowJs: boolean;
 	};
 };
+
+export type TypeScriptConfiguration = Readonly<{
+	compilerOptions: Readonly<Omit<NonNullable<TsconfigRaw['compilerOptions']>, 'paths'> & {
+		paths: Readonly<Record<string, readonly string[]>>;
+		allowJs: boolean;
+	}>;
+}>;
 
 export type HookData = {
 	active: boolean;
