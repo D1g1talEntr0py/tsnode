@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
-import { createProjectFixture } from './utils/fixture';
+import { childEnvironment, createProjectFixture } from './utils/fixture';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -60,7 +60,7 @@ try {
 		'--import', sourceResolveHookPath,
 		'--input-type=module',
 		'--eval', script,
-	], { cwd: fixture.path, env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+	], { cwd: fixture.path, env: childEnvironment({ NODE_NO_WARNINGS: '1' }) });
 
 	expect(stderr).toBe('');
 	return JSON.parse(stdout) as {
@@ -70,6 +70,33 @@ try {
 };
 
 describe('resolve hook integration', () => {
+	test('resolves inherited JSONC aliases relative to the base config without baseUrl', async () => {
+		const result = await runResolution({
+			'entry.ts': '',
+			'tsconfig.json': '\uFEFF{ /* root */ "extends": "./shared/base.json", }',
+			'shared/base.json': '{ // inherited aliases\n "compilerOptions": { "paths": { "@shared/*": ["src/*",], }, }, }',
+			'shared/src/value.ts': 'export const value = "inherited";',
+			'src/value.ts': 'export const value = "wrong-root";',
+		}, [{ specifier: '@shared/value' }]);
+		expect(result.results[0]).toMatchObject({ value: 'inherited' });
+	});
+
+	test('prioritizes exact and longest-prefix aliases without weaker-pattern fallback', async () => {
+		const result = await runResolution({
+			'entry.ts': '',
+			'tsconfig.json': JSON.stringify({ compilerOptions: { paths: {
+				'@app/*': ['broad/*'], '@app/deep/*': ['narrow/*'], '@app/deep/exact': ['exact.ts'],
+			} } }),
+			'exact.ts': 'export const value = "exact";',
+			'broad/deep/exact.ts': 'export const value = "wrong-exact";',
+			'broad/deep/value.ts': 'export const value = "wrong-wildcard";',
+			'narrow/value.ts': 'export const value = "narrow";',
+			'broad/deep/missing.ts': 'export const value = "wrong-fallback";',
+		}, [{ specifier: '@app/deep/exact' }, { specifier: '@app/deep/value' }, { specifier: '@app/deep/missing' }]);
+		expect(result.results.slice(0, 2).map(({ value }) => value)).toEqual(['exact', 'narrow']);
+		expect(result.results[2]).toMatchObject({ code: 'ERR_MODULE_NOT_FOUND' });
+	});
+
 	test('remaps JavaScript imports to TypeScript and resolves extensionless files', async () => {
 		const result = await runResolution({
 			'entry.ts': '',
@@ -149,7 +176,7 @@ describe('resolve hook integration', () => {
 		]);
 
 		expect(result.results[0]).toMatchObject({ value: 'package' });
-		expect(result.results[1].code).toBe('ERR_PACKAGE_PATH_NOT_EXPORTED');
+		expect(result.results[1]!.code).toBe('ERR_PACKAGE_PATH_NOT_EXPORTED');
 	});
 
 	test('remaps JavaScript targets in package exports and imports maps', async () => {
@@ -171,6 +198,19 @@ describe('resolve hook integration', () => {
 		]);
 
 		expect(result.results.map(({ value }) => value)).toEqual(['exports-root', 'exports-feature', 'imports-feature']);
+	});
+
+	test('preserves package import names with query strings and trailing fragments', async () => {
+		const result = await runResolution({
+			'package.json': JSON.stringify({ type: 'module', imports: { '#feature': './feature.ts' } }),
+			'entry.ts': '',
+			'feature.ts': 'export enum Value { Answer = 42 }; export const value = Value.Answer; export const url = import.meta.url;',
+		}, [{ specifier: '#feature?raw=1#fragment' }]);
+		expect(result.results[0]).toMatchObject({ value: 42 });
+		const url = new URL(result.results[0]!.url!);
+		expect(url.searchParams.get('raw')).toBe('1');
+		expect(url.searchParams.get('tsnode-namespace')).toBe('resolution-test');
+		expect(url.hash).toBe('#fragment');
 	});
 
 	test('preserves import queries while applying the namespace', async () => {
@@ -198,17 +238,17 @@ describe('resolve hook integration', () => {
 			'empty/.keep': '',
 		}, [{ specifier: './empty' }]);
 
-		expect(result.results[0].code).toBe('ERR_MODULE_NOT_FOUND');
-		expect(result.results[0].message).toContain('/empty/index');
+		expect(result.results[0]!.code).toBe('ERR_MODULE_NOT_FOUND');
+		expect(result.results[0]!.message).toContain('/empty/index');
 	});
 
 	test('passes through builtins and preserves unresolved errors without an index suffix', async () => {
 		const builtin = await runResolution({ 'entry.ts': '' }, [{ specifier: 'node:path' }], { unscoped: true });
 		const unresolved = await runResolution({ 'entry.ts': '' }, [{ specifier: './missing' }]);
 
-		expect(builtin.results[0].keys).toContain('join');
-		expect(unresolved.results[0].code).toBe('ERR_MODULE_NOT_FOUND');
-		expect(unresolved.results[0].message).not.toContain('/index');
+		expect(builtin.results[0]!.keys).toContain('join');
+		expect(unresolved.results[0]!.code).toBe('ERR_MODULE_NOT_FOUND');
+		expect(unresolved.results[0]!.message).not.toContain('/index');
 	});
 
 	test('short-circuits virtual sources through resolve and load', async () => {

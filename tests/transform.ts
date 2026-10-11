@@ -53,7 +53,8 @@ describe('transform', () => {
 			expect(transformed.map).not.toBe('');
 
 			const { map } = transformed;
-			if (typeof map !== 'string') {
+			expect(map).toBeDefined();
+			if (map && typeof map !== 'string') {
 				expect(map.sources.length).toBe(1);
 				expect(map.sources[0]).toBe(fileName);
 				expect(map.names).toStrictEqual(['named']);
@@ -71,7 +72,8 @@ describe('transform', () => {
 			expect(transformed.map).not.toBe('');
 
 			const { map } = transformed;
-			if (typeof map !== 'string') {
+			expect(map).toBeDefined();
+			if (map && typeof map !== 'string') {
 				expect(map.sources.length).toBe(1);
 				expect(map.sources[0]).toBe(fileName);
 				expect(map.names).toStrictEqual(['named']);

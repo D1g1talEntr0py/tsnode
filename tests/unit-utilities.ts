@@ -6,7 +6,7 @@ import { describe, expect, expectTypeOf, test } from 'vitest';
 import { outdent } from './utils/outdent';
 import { readJsonFile, readJsonFileSync } from '../src/utils/read-json-file';
 import type { JsonValue } from '../src/utils/json';
-import { tmpdir, legacyTmpdirs, cacheSchemaVersion } from '../src/utils/temporary-directory';
+import { tmpdir, legacyTempDirs, cacheSchemaVersion } from '../src/utils/temporary-directory';
 import {
 	bgBlue,
 	bgGray,
@@ -274,8 +274,8 @@ describe('unit utilities', () => {
 			const expectedUserId = process.geteuid ? process.geteuid() : os.userInfo().username;
 
 			// Bumping the schema version must leave the old directories sweepable
-			expect(legacyTmpdirs).toContain(path.join(os.tmpdir(), `tsnode-${expectedUserId}`));
-			expect(legacyTmpdirs).not.toContain(tmpdir);
+			expect(legacyTempDirs).toContain(path.join(os.tmpdir(), `tsnode-${expectedUserId}`));
+			expect(legacyTempDirs).not.toContain(tmpdir);
 		});
 
 		test('formats pipe paths for the current platform', () => {

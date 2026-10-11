@@ -1,12 +1,13 @@
 import { pathToFileURL } from 'node:url';
+import { isBuiltin } from 'node:module';
 import { extname, posix, sep } from 'node:path';
 import { resolveTsconfigPaths } from '../utils/tsconfig';
 import { logEsm as log, debugEnabled } from '../utils/debug';
 import { ensureParsedTsconfig } from './initialize';
-import { getFormatFromFileUrl, namespaceQuery, getNamespace } from './utils';
+import { getFormatFromFileUrl, namespaceQuery, getNamespace, getModuleRequest } from './utils';
 import { fileUrlPrefix, nodeModulesPath, tsExtensionsPattern, isDirectoryPattern, isRelativePath, isFilePath } from '../utils/path-utils';
 
-import type { HookData, ModuleRequest } from '../types';
+import type { HookData } from '../types';
 import type { ResolveHookContext, ResolveHookSync } from 'node:module';
 
 type NextResolveSync = Parameters<ResolveHookSync>[2];
@@ -178,14 +179,15 @@ const resolveDirectorySync = (specifier: string, context: ResolveHookContext, ne
 };
 
 const resolveTsPathsSync = (specifier: string, context: ResolveHookContext, nextResolve: NextResolveSync, hookData: HookData) => {
-	const parsedTsconfig = ensureParsedTsconfig(hookData);
-
 	// Bare specifier or TS path alias (e.g. `ns:foo`) && TS path alias
-	if (isTsconfigPathAliasSpecifier(specifier) && parsedTsconfig && !context.parentURL?.includes('/node_modules/')) {
-		for (const possiblePath of resolveTsconfigPaths(parsedTsconfig, specifier)) {
-			try {
-				return resolveDirectorySync(pathToFileURL(possiblePath).toString(), context, nextResolve, hookData);
-			} catch { /* ignore */ }
+	if (isTsconfigPathAliasSpecifier(specifier) && !context.parentURL?.includes('/node_modules/')) {
+		const parsedTsconfig = ensureParsedTsconfig(hookData);
+		if (parsedTsconfig) {
+			for (const possiblePath of resolveTsconfigPaths(parsedTsconfig, specifier)) {
+				try {
+					return resolveDirectorySync(pathToFileURL(possiblePath).toString(), context, nextResolve, hookData);
+				} catch { /* ignore */ }
+			}
 		}
 	}
 
@@ -195,17 +197,17 @@ const resolveTsPathsSync = (specifier: string, context: ResolveHookContext, next
 const tsnodeProtocol = 'tsnode://';
 const explicitRuntimeFilePattern = /\.(?:m?js|json)($|\?)/;
 
-const addQuery = (url: string, query: string) => `${url}${url.includes('?') ? '&' : '?'}${query}`;
-const splitRequestSpecifier = (specifier: string): readonly [string, string | undefined] => {
-	const queryIndex = specifier.indexOf('?');
-	if (queryIndex === -1) { return [specifier, undefined] }
-
-	const nextQueryIndex = specifier.indexOf('?', queryIndex + 1);
-	return [specifier.slice(0, queryIndex), specifier.slice(queryIndex + 1, nextQueryIndex === -1 ? specifier.length : nextQueryIndex)];
+const addQuery = (url: string, query: string) => {
+	const parsed = new URL(url);
+	parsed.search += `${parsed.search ? '&' : '?'}${query}`;
+	return parsed.href;
 };
-
-const isModuleRequest = (value: unknown): value is ModuleRequest => {
-	return value !== null && typeof value === 'object' && 'namespace' in value && typeof value.namespace === 'string' && 'specifier' in value && typeof value.specifier === 'string' && 'parentURL' in value && typeof value.parentURL === 'string';
+const splitRequestSpecifier = (specifier: string): readonly [string, string | undefined, string | undefined] => {
+	const queryIndex = specifier.indexOf('?');
+	const hashIndex = specifier.indexOf('#', specifier.startsWith('#') ? 1 : 0);
+	const fragment = hashIndex === -1 ? undefined : specifier.slice(hashIndex);
+	if (queryIndex === -1 || (hashIndex !== -1 && hashIndex < queryIndex)) { return [hashIndex === -1 ? specifier : specifier.slice(0, hashIndex), undefined, fragment] }
+	return [specifier.slice(0, queryIndex), specifier.slice(queryIndex + 1, hashIndex === -1 ? undefined : hashIndex), fragment];
 };
 
 const getRequestContext = (specifier: string, context: ResolveHookContext, { namespace }: HookData) => {
@@ -214,17 +216,8 @@ const getRequestContext = (specifier: string, context: ResolveHookContext, { nam
 	let parentURL = context.parentURL;
 
 	if (namespace) {
-		let moduleRequest: ModuleRequest | undefined;
-
-		// Initial request from tsImport()
-		if (specifier.startsWith(tsnodeProtocol)) {
-			try {
-				const request: unknown = JSON.parse(specifier.slice(tsnodeProtocol.length));
-				if (isModuleRequest(request)) { moduleRequest = request }
-			} catch { /* ignore */ }
-
-			if (moduleRequest?.namespace) { requestNamespace = moduleRequest.namespace }
-		}
+		const moduleRequest = getModuleRequest(specifier);
+		if (moduleRequest) { requestNamespace = moduleRequest.namespace }
 
 		if (namespace !== requestNamespace) { return }
 
@@ -237,12 +230,18 @@ const getRequestContext = (specifier: string, context: ResolveHookContext, { nam
 	return { specifier, requestNamespace, parentURL };
 };
 
-const finalizeResolved = (resolved: ReturnType<ResolveHookSync>, query: string | undefined, requestNamespace: string | undefined) => {
+const finalizeResolved = (resolved: ReturnType<ResolveHookSync>, query: string | undefined, requestNamespace: string | undefined, fragment: string | undefined) => {
+	if (resolved.format === 'builtin' || resolved.url.startsWith('node:') || resolved.url.startsWith('data:')) { return resolved }
 	if (query) { resolved.url = addQuery(resolved.url, query) }
+	if (fragment !== undefined) {
+		const parsed = new URL(resolved.url);
+		parsed.hash = fragment;
+		resolved.url = parsed.href;
+	}
 
 	// Inherit namespace
-	if (requestNamespace && !resolved.url.includes(namespaceQuery)) {
-		resolved.url = addQuery(resolved.url, `${namespaceQuery}${requestNamespace}`);
+	if (requestNamespace && getNamespace(resolved.url) === undefined) {
+		resolved.url = addQuery(resolved.url, `${namespaceQuery}${encodeURIComponent(requestNamespace)}`);
 	}
 
 	return resolved;
@@ -295,14 +294,15 @@ const createResolveWithNamespace = (hookData: HookData): ResolveHookSync => ((sp
 	if (!request) { return nextResolve(specifier, context) }
 
 	const resolvedContext = request.parentURL && request.parentURL !== context.parentURL ? { ...context, parentURL: request.parentURL } : context;
-	const [ cleanSpecifier, query ] = splitRequestSpecifier(request.specifier);
+	if (isBuiltin(request.specifier) || request.specifier.startsWith('data:')) { return nextResolve(request.specifier, resolvedContext) }
+	const [ cleanSpecifier, query, fragment ] = splitRequestSpecifier(request.specifier);
 	const resolved = resolveTsPathsSync(cleanSpecifier, resolvedContext, nextResolve, hookData);
 
 	if (resolved.format === 'builtin') { return resolved }
 
 	shouldFinalizeDirectResolve(resolved);
 
-	return finalizeResolved(resolved, query, request.requestNamespace);
+	return finalizeResolved(resolved, query, request.requestNamespace, fragment);
 });
 
 export const createResolveSync = (hookData: HookData): ResolveHookSync => {

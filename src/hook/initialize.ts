@@ -1,15 +1,15 @@
 import { loadTsconfig } from '../utils/tsconfig';
-import type { HookData, ParsedTsconfig, RegisterOptions } from '../types';
+import type { HookData, TypeScriptConfiguration, RegisterOptions } from '../types';
 
-export const ensureParsedTsconfig = (data: HookData): ParsedTsconfig | undefined => {
+export const ensureParsedTsconfig = (data: HookData): TypeScriptConfiguration | undefined => {
 	if (data.tsconfig === false) {
 		data.hasLoadedTsconfig = true;
 		return undefined;
 	}
 
 	if (!data.hasLoadedTsconfig) {
-		data.parsedTsconfig = loadTsconfig(data.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH']);
 		data.hasLoadedTsconfig = true;
+		data.parsedTsconfig = loadTsconfig(data.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH']);
 	}
 
 	return data.parsedTsconfig;

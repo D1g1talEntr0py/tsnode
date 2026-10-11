@@ -1,14 +1,10 @@
 import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { noop } from '../constants';
 import path from 'node:path';
 import cache from './cache';
 import { cacheConfig, patchSourcefileOption, patchTransformResult } from './get-esbuild-options';
-import type { Transformed } from '../../types';
+import type { CachedTransformOptions, Transformed } from '../../types';
 import type { TransformOptions } from 'esbuild';
-
-type CachedTransformOptions = TransformOptions & {
-	tsconfigHash?: string | undefined;
-	getTsconfigRaw?: () => TransformOptions['tsconfigRaw'];
-};
 
 type EsbuildModule = typeof import('esbuild');
 
@@ -36,67 +32,20 @@ const isTransformFailure = (error: unknown): error is MutableTransformFailure =>
 	return error instanceof Error && 'errors' in error && Array.isArray(error.errors) && 'warnings' in error && Array.isArray(error.warnings);
 };
 
-// tsconfigRaw is a stable object reference per project but can be large; cache its serialization instead of re-stringifying per transformed file
-const stringifyCache = new WeakMap<object, string>();
-
-const stringifyStable = (value: unknown) => {
-	if (value && typeof value === 'object') {
-		let cached = stringifyCache.get(value);
-
-		if (cached !== undefined) { return cached }
-
-		cached = JSON.stringify(value);
-		stringifyCache.set(value, cached);
-
-		return cached;
+const bucket = (value: string) => {
+	let hash = 2166136261;
+	for (let index = 0, length = value.length; index < length; index += 1) {
+		hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
 	}
-
-	return JSON.stringify(value) ?? '';
+	return (hash >>> 0).toString(36);
 };
-
-// Fast non-crypto hash for cache keys. We only need stable bucketing, not collision resistance.
-const hashString = (hashSeed: number, data: string) => {
-	let hash = hashSeed;
-	for (let index = 0, length = data.length; index < length; index += 1) {
-		// hash ^= data.charCodeAt(index);
-		hash = Math.imul(hash ^ data.charCodeAt(index), 0x01000193);
-	}
-
-	return hash;
-};
-
-const hashSeparator = '\0';
-const fastHashPair = (part1: string, part2: string) => {
-	let hash = 0x811c9dc5;
-	hash = hashString(hash, part1);
-	hash = hashString(hash, hashSeparator);
-	hash = hashString(hash, part2);
-
-	return (hash >>> 0).toString(16);
-};
-const fastHashParts = (part1: string, part2: string, part3: string, part4: string, part5: string) => {
-	let hash = 0x811c9dc5;
-	hash = hashString(hash, part1);
-	hash = hashString(hash, hashSeparator);
-	hash = hashString(hash, part2);
-	hash = hashString(hash, hashSeparator);
-	hash = hashString(hash, part3);
-	hash = hashString(hash, hashSeparator);
-	hash = hashString(hash, part4);
-	hash = hashString(hash, hashSeparator);
-	hash = hashString(hash, part5);
-
-	return (hash >>> 0).toString(16);
-};
-
-const baseHashOptions = stringifyStable({ ...cacheConfig, format: 'esm' });
 
 // The stripper (amaro) ships with Node, so its output is tied to the Node version
 const stripVersionSalt = `-strip-${process.versions.node}`;
 
 const stripTypeScriptTypesQuietly = (code: string) => {
 	const emitWarning = process.emitWarning;
-	process.emitWarning = () => {};
+	process.emitWarning = noop;
 
 	try {
 		return stripTypeScriptTypes(code, { mode: 'strip' });
@@ -114,35 +63,17 @@ const stripTypeScriptTypesQuietly = (code: string) => {
  * @returns The stripped code.
  */
 export const stripTypes = (code: string): Transformed => {
-	const hash = fastHashPair(code, stripVersionSalt);
-	let stripped = cache.get(hash);
+	const hash = `v3-${bucket(code)}${stripVersionSalt}`;
+	const identity = [ code, stripVersionSalt ];
+	let stripped = cache.get(hash, identity);
 
-	if (!stripped) {
-		stripped = { code: stripTypeScriptTypesQuietly(code) };
+	if (!Array.isArray(stripped?.identity) || stripped.identity.length !== 2 || stripped.identity[0] !== code || stripped.identity[1] !== stripVersionSalt) {
+		stripped = { code: stripTypeScriptTypesQuietly(code), identity };
 		cache.set(hash, stripped);
 	}
 
 	return stripped;
 };
-
-const hasCustomHashOptions = (extendOptions: TransformOptions | undefined) => {
-	if (!extendOptions) { return false }
-
-	for (const optionName in extendOptions) {
-		if (optionName !== 'sourcefile' && optionName !== 'tsconfigRaw' && optionName !== 'tsconfigHash' && optionName !== 'getTsconfigRaw') { return true }
-	}
-
-	return false;
-};
-
-const getHash = (
-	code: string,
-	filePath: string,
-	options: TransformOptions,
-	versionSalt: string,
-	hashOptionsString: string,
-	tsconfigHash: string | undefined
-) => fastHashParts(code, filePath, hashOptionsString, tsconfigHash ?? stringifyStable(options.tsconfigRaw), versionSalt);
 
 const getPathname = (value: string) => {
 	const queryIndex = value.indexOf('?');
@@ -152,31 +83,47 @@ const getPathname = (value: string) => {
 
 const needsSourcefilePatch = (sourcefile: string | undefined) => !sourcefile ? false : path.extname(getPathname(sourcefile)).length === 0;
 
+let defaultOptionsIdentity: string | undefined;
+
+const getCustomOptionsIdentity = (options: TransformOptions) => {
+	let cacheable = true;
+	const expressionIdentity = (value: RegExp | undefined) => value instanceof RegExp ? [value.source, value.flags] : undefined;
+	const identity = JSON.stringify([ options, Object.keys(options), expressionIdentity(options.mangleProps), expressionIdentity(options.reserveProps) ], function (this: Record<string, unknown>, key: string, value: unknown) {
+		const original = this[key];
+
+		if (typeof original === 'function' || typeof original === 'symbol') { cacheable = false }
+
+		if (original !== null && typeof original === 'object') {
+			const prototype: unknown = Object.getPrototypeOf(original);
+			const supportedExpression = original instanceof RegExp && (original === options.mangleProps || original === options.reserveProps);
+			if ((!Array.isArray(original) && prototype !== Object.prototype && prototype !== null && !supportedExpression) || typeof Reflect.get(original, 'toJSON') === 'function') { cacheable = false }
+		}
+
+		return value;
+	});
+
+	return cacheable ? identity : undefined;
+};
+
 export const transformSync = (code: string, filePath: string, extendOptions?: CachedTransformOptions): Transformed => {
-	const { tsconfigHash, getTsconfigRaw, ...esbuildExtendOptions } = extendOptions ?? {};
+	const { tsconfigHash, getTsconfigRaw, tsconfigSnapshot, ...esbuildExtendOptions } = extendOptions ?? {};
 	const esbuildOptions: TransformOptions = { ...cacheConfig, format: 'esm', sourcefile: filePath, ...esbuildExtendOptions };
 	const originalSourcefile = needsSourcefilePatch(esbuildOptions.sourcefile) ? patchSourcefileOption(esbuildOptions) : esbuildOptions.sourcefile;
+	const snapshot = esbuildOptions.tsconfigRaw === undefined ? tsconfigSnapshot : undefined;
 
-	// Only call getTsconfigRaw now if tsconfigHash is absent — we need tsconfigRaw to compute the hash.
-	// When tsconfigHash is provided it stands in for the tsconfig content in the hash, so we can
-	// defer the (potentially expensive) getTsconfigRaw call until we confirm a cache miss.
-	if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined && !tsconfigHash) {
-		const tsconfigRaw = getTsconfigRaw();
+	if ((snapshot || getTsconfigRaw) && esbuildOptions.tsconfigRaw === undefined) {
+		const tsconfigRaw = snapshot ? snapshot.raw : getTsconfigRaw!();
 		if (tsconfigRaw !== undefined) { esbuildOptions.tsconfigRaw = tsconfigRaw }
 	}
 
-	const hashOptionsString = hasCustomHashOptions(extendOptions) ? stringifyStable({ ...esbuildOptions, sourcefile: undefined, tsconfigRaw: undefined }) : baseHashOptions;
+	const customOptions = Object.keys(esbuildExtendOptions).some(option => option !== 'sourcefile' && option !== 'tsconfigRaw') || (!snapshot && esbuildOptions.tsconfigRaw !== undefined);
+	const optionsIdentity = customOptions ? getCustomOptionsIdentity(esbuildOptions) : defaultOptionsIdentity ??= JSON.stringify({ ...cacheConfig, format: 'esm' });
+	const compilerIdentity = snapshot && !customOptions ? snapshot.identity ??= JSON.stringify([optionsIdentity, tsconfigHash ?? '', snapshot.serialized, getEsbuildVersionSalt()]) : JSON.stringify([optionsIdentity, tsconfigHash ?? '', snapshot?.serialized ?? JSON.stringify(esbuildOptions.tsconfigRaw) ?? '', getEsbuildVersionSalt()]);
+	const identity = `[${JSON.stringify(code)},${JSON.stringify({ filePath, sourcefile: esbuildOptions.sourcefile, originalSourcefile: originalSourcefile === esbuildOptions.sourcefile ? undefined : originalSourcefile })},${compilerIdentity}]`;
+	const hash = `v3-${bucket(code)}-${bucket(filePath)}`;
+	let transformed = optionsIdentity === undefined ? undefined : cache.get(hash, identity);
 
-	const hash = getHash(code, filePath, esbuildOptions, getEsbuildVersionSalt(), hashOptionsString, tsconfigHash);
-	let transformed = cache.get(hash);
-
-	if (!transformed) {
-		// Cache miss — call getTsconfigRaw if it was deferred above
-		if (getTsconfigRaw && esbuildOptions.tsconfigRaw === undefined) {
-			const tsconfigRaw = getTsconfigRaw();
-			if (tsconfigRaw !== undefined) { esbuildOptions.tsconfigRaw = tsconfigRaw }
-		}
-
+	if (transformed?.identity !== identity) {
 		let result;
 
 		try {
@@ -193,8 +140,9 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 
 		// If the sourcefile has no extension, esbuild doesn't generate a source map, so we patch it in to preserve positions
 		transformed = Boolean(esbuildOptions.sourcemap) || originalSourcefile !== esbuildOptions.sourcefile ? patchTransformResult(result, esbuildOptions.sourcefile, originalSourcefile) : { code: result.code };
+		transformed = { ...transformed, identity };
 
-		cache.set(hash, transformed);
+		if (optionsIdentity !== undefined) { cache.set(hash, transformed) }
 	}
 
 	return transformed;

@@ -1,5 +1,6 @@
-import type { TsconfigRaw } from 'esbuild';
-import type { TsConfigJson } from './utils/tsconfig-parser';
+import type { TransformOptions, TsconfigRaw } from 'esbuild';
+
+type Expand<T> = T extends infer U ? { [K in keyof U]: U[K] } : never;
 
 export type NodeError = Error & {
 	code: string;
@@ -64,6 +65,12 @@ export type Transformed = {
 	map?: SourceMap | undefined;
 };
 
+export type CachedTransformOptions = Expand<TransformOptions & {
+	tsconfigHash?: string | undefined;
+	getTsconfigRaw?: () => TransformOptions['tsconfigRaw'];
+	tsconfigSnapshot?: { raw: TransformOptions['tsconfigRaw']; serialized: string; identity?: string };
+}>;
+
 export type ParsedTsconfig = {
 	compilerOptions: {
 		paths: Record<string, string[]>;
@@ -100,6 +107,7 @@ export type DynamicImport = <Module extends object = ModuleNamespace>(specifier:
 export type TsImportOptions = {
 	parentURL: string;
 	onImport?: RegisterOptions['onImport'];
+	virtualSources?: RegisterOptions['virtualSources'];
 	tsconfig?: RegisterOptions['tsconfig'];
 };
 
@@ -107,12 +115,13 @@ export type ModuleImport = <Module extends object = ModuleNamespace>(specifier: 
 
 export type RegisterHandle = {
 	unregister: Unregister;
+	[Symbol.dispose]: Unregister;
 	import?: ScopedImport;
 };
 
-export type NamespacedUnregister = RegisterHandle & {
+export type NamespacedUnregister = Expand<RegisterHandle & {
 	import: ScopedImport;
-};
+}>;
 
 export type Register = {
 	(options: RequiredProperty<RegisterOptions, 'namespace'>): NamespacedUnregister;

@@ -1,4 +1,5 @@
 import { tsExtensions } from '../utils/path-utils';
+import type { ModuleRequest } from '../types';
 
 const moduleExtensions = new Set(tsExtensions);
 
@@ -44,14 +45,19 @@ export const getFormatFromFileUrl = (fileUrl: string) => {
 export const namespaceQuery = 'tsnode-namespace=';
 
 export const getNamespace = (url: string) => {
-	const index = url.indexOf(namespaceQuery);
-	if (index === -1) { return }
+	const queryIndex = url.indexOf('?');
+	const hashIndex = url.indexOf('#');
+	if (queryIndex === -1 || (hashIndex !== -1 && hashIndex < queryIndex)) { return }
+	return new URLSearchParams(url.slice(queryIndex + 1, hashIndex === -1 ? undefined : hashIndex)).get('tsnode-namespace') ?? undefined;
+};
 
-	const charBefore = url[index - 1];
-	if (charBefore !== '?' && charBefore !== '&') { return }
-
-	const startIndex = index + namespaceQuery.length;
-	const endIndex = url.indexOf('&', startIndex);
-
-	return endIndex === -1 ? url.slice(startIndex) : url.slice(startIndex, endIndex);
+export const getModuleRequest = (specifier: string): ModuleRequest | undefined => {
+	if (!specifier.startsWith('tsnode://')) { return }
+	try {
+		const request: unknown = JSON.parse(specifier.slice('tsnode://'.length));
+		if (request !== null && typeof request === 'object' && 'namespace' in request && typeof request.namespace === 'string' && 'specifier' in request && typeof request.specifier === 'string' && 'parentURL' in request && typeof request.parentURL === 'string') {
+			return request as ModuleRequest;
+		}
+	} catch { /* ignore */ }
+	return undefined;
 };

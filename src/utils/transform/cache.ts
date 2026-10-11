@@ -1,23 +1,33 @@
 import path from 'node:path';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { noop, encoding } from '../constants';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { chmod, unlink, mkdir, readdir, rm, writeFile, stat, readFile } from 'node:fs/promises';
 import { Json, type JsonDecoder } from '../json';
-import { tmpdir, legacyTmpdirs } from '../temporary-directory';
+import { tmpdir, legacyTempDirs } from '../temporary-directory';
 import type { Transformed } from '../../types';
 
-const noop = () => {};
+type RequestIdentity = string[] | string;
+type Cache<T> = {
+	get: (key: string, identity?: RequestIdentity) => T | undefined;
+	set: (key: string, value: T) => Cache<T>;
+	has: (key: string) => boolean;
+	clear: () => void;
+};
+export type CachedTransform = Transformed & { identity?: RequestIdentity };
 
 /**
  * Bounds retained heap usage. Independent of how much is persisted to disk.
  *
- * Not a performance knob. Keys are content hashes and Node loads each URL once,
+ * Not a performance knob. Keys are verified buckets and Node loads each URL once,
  * so within a process a given key is requested exactly once; measured in-process
- * hit rate is 0%. Disabling this tier entirely changed neither wall time nor RSS.
+ * hit rate is low except for identical sources. Disabling this tier entirely changed neither wall time nor RSS in the measured unique-source graph.
  * Eviction is insertion-order (the oldest entry is dropped); nothing is promoted
  * on access, so this is FIFO rather than LRU. That distinction is immaterial
  * while the hit rate is zero, and the disk tier backstops any eviction.
  */
 const maxMemoryCacheEntries = 64;
+const maxRetainedBytes = 8 * 1024 * 1024;
+const maxPendingWriteEntries = 64;
 
 /**
  * Per-process cap on entries persisted to disk. Previously this reused
@@ -53,13 +63,6 @@ const maxSweepConcurrency = 16;
 /** Records when the last sweep ran. Not a cache entry; excluded from expiry. */
 const sweepMarkerName = '.last-sweep';
 
-type Cache<T> = {
-	get: (key: string) => T | undefined;
-	set: (key: string, value: T) => Cache<T>;
-	has: (key: string) => boolean;
-	clear: () => void;
-};
-
 export const forEachConcurrent = async <T>(values: T[], concurrency: number, task: (value: T) => Promise<void>) => {
 	if (!Number.isInteger(concurrency) || concurrency < 1) {
 		throw new RangeError(`Concurrency must be a positive integer, got ${concurrency}`);
@@ -82,9 +85,9 @@ export const forEachConcurrent = async <T>(values: T[], concurrency: number, tas
  * A file-based cache that also keeps entries in memory for fast access.
  * Implements the `Cache<T>` interface.
  */
-class FileCache<T> implements Cache<T> {
-	readonly #decode: JsonDecoder<T>;
-	#memoryCache = new Map<string, T>();
+class FileCache<T extends CachedTransform> implements Cache<T> {
+	#memoryCache = new Map<string, { value: T; bytes: number }>();
+	#memoryCacheBytes = 0;
 	/**
 	 * By using tmpdir, the expectation is for the OS to clean any files
 	 * that haven't been read for a while.
@@ -98,21 +101,25 @@ class FileCache<T> implements Cache<T> {
 	#cacheDirectory = tmpdir;
 	// Superseded layouts, removed opportunistically (notably on Windows, where
 	// the OS does not sweep temp files itself)
-	#oldCacheDirectories: string[] = legacyTmpdirs;
+	#oldCacheDirectories: string[] = legacyTempDirs;
 	#diskCacheWrites = 0;
 	/**
 	 * Entries produced during this process that have not yet been written out.
-	 * Writes are deferred so the (synchronous) module load hook never blocks on
-	 * disk I/O; they are flushed on the next event-loop turn, or synchronously
-	 * on exit if the process ends first.
+	 * Serialized payloads are bounded by entry count and UTF-8 byte length.
+	 * Disk writes run on the next event-loop turn, on queue overflow, or on exit.
 	 */
-	#pendingWrites = new Map<string, T>();
+	#pendingWrites = new Map<string, { serialized: string; bytes: number }>();
+	#pendingWriteBytes = 0;
 	#flushScheduled = false;
 	#exitHookRegistered = false;
 	#cacheDirectoryReady: Promise<void> | undefined;
 	#cacheDirectoryReadyPath: string | undefined;
 	#cacheDirectoryExists: boolean | undefined;
+	#cacheDirectoryWasMissing = false;
 	#maintenanceScheduled = false;
+	#temporarySequence = 0;
+	#temporarySuffix: string | undefined;
+	readonly #decode: JsonDecoder<T>;
 
 	constructor(decoder: JsonDecoder<T>) {
 		this.#decode = decoder;
@@ -124,9 +131,10 @@ class FileCache<T> implements Cache<T> {
 	 * If the key is found on disk, it will be loaded into memory and returned.
 	 * @param key The key to look up in the cache.
 	 * @returns The cached value, or undefined if the key is not in the cache.
+	 * @param identity Exact request fields required for a verified hit.
 	 */
-	get(key: string) {
-		return this.#getLocal(key) ?? this.#acceptDiskHit(key, this.#readDiskEntry(key));
+	get(key: string, identity?: RequestIdentity) {
+		return this.#getLocal(key, identity) ?? this.#acceptDiskHit(key, this.#readDiskEntry(key, identity));
 	}
 
 	/**
@@ -135,9 +143,10 @@ class FileCache<T> implements Cache<T> {
 	 * If the key is found on disk, it will be loaded into memory and returned.
 	 * @param key The key to look up in the cache.
 	 * @returns A promise that resolves to the cached value, or undefined if the key is not in the cache.
+	 * @param identity Exact request fields required for a verified hit.
 	 */
-	async getAsync(key: string) {
-		return this.#getLocal(key) ?? this.#acceptDiskHit(key, await this.#readDiskEntryAsync(key));
+	async getAsync(key: string, identity?: RequestIdentity) {
+		return this.#getLocal(key, identity) ?? this.#acceptDiskHit(key, await this.#readDiskEntryAsync(key, identity));
 	}
 
 	/**
@@ -148,14 +157,28 @@ class FileCache<T> implements Cache<T> {
 	 * @returns The cache instance (for chaining).
 	 */
 	set(key: string, value: T) {
-		this.#setMemory(key, value);
+		const { identity, ...result } = value;
+		const serialized = identity ? `{"identity":${typeof identity === 'string' ? identity : JSON.stringify(identity)},"value":${JSON.stringify(result)}}` : JSON.stringify(value);
+		const bytes = Buffer.byteLength(serialized, encoding);
 
-		if (value && this.#diskCacheWrites < maxDiskCacheWrites) {
+		this.#setMemory(key, value, bytes);
+
+		const previous = this.#pendingWrites.get(key);
+
+		if (previous !== undefined) {
+			this.#pendingWriteBytes -= previous.bytes;
+			this.#pendingWrites.delete(key);
+		}
+
+		if (value && bytes <= maxRetainedBytes && this.#diskCacheWrites < maxDiskCacheWrites) {
 			this.#diskCacheWrites += 1;
 
-			// Queue instead of writing inline: serialization + writeFileSync
-			// would otherwise run inside the load hook for every cache miss.
-			this.#pendingWrites.set(key, value);
+			if (this.#pendingWrites.size >= maxPendingWriteEntries || this.#pendingWriteBytes + bytes > maxRetainedBytes) {
+				this.#flushPendingWritesSync();
+			}
+
+			this.#pendingWrites.set(key, { serialized, bytes });
+			this.#pendingWriteBytes += bytes;
 			this.#scheduleFlush();
 		}
 
@@ -174,7 +197,9 @@ class FileCache<T> implements Cache<T> {
 	/** Clears the cache, both in memory and pending disk writes. */
 	clear() {
 		this.#memoryCache.clear();
+		this.#memoryCacheBytes = 0;
 		this.#pendingWrites.clear();
+		this.#pendingWriteBytes = 0;
 	}
 
 	/**
@@ -286,41 +311,81 @@ class FileCache<T> implements Cache<T> {
 	#canReadDisk() {
 		if (this.#cacheDirectoryExists) { return true }
 
-		return existsSync(this.#cacheDirectory) ? (this.#cacheDirectoryExists = true) : false;
+		if (existsSync(this.#cacheDirectory)) {
+			this.#cacheDirectoryExists = true;
+			return true;
+		}
+
+		this.#cacheDirectoryWasMissing = true;
+		return false;
 	}
 
 	/**
 	 * Sets the cached value for the given key in memory. If the cache exceeds the maximum number of entries, the oldest entry will be removed.
 	 * @param key The key to set in the cache.
 	 * @param value The value to set in the cache.
+	 * @param bytes The serialized value size in bytes.
 	 */
-	#setMemory(key: string, value: T) {
-		if (!this.#memoryCache.has(key) && this.#memoryCache.size >= maxMemoryCacheEntries) {
-			const oldestKey = this.#memoryCache.keys().next().value;
-			if (oldestKey !== undefined) { this.#memoryCache.delete(oldestKey) }
+	#setMemory(key: string, value: T, bytes: number) {
+		const previous = this.#memoryCache.get(key);
+		if (previous) {
+			this.#memoryCacheBytes -= previous.bytes;
+			this.#memoryCache.delete(key);
 		}
 
-		this.#memoryCache.set(key, value);
+		if (bytes > maxRetainedBytes) { return }
+
+		while (this.#memoryCache.size >= maxMemoryCacheEntries || this.#memoryCacheBytes + bytes > maxRetainedBytes) {
+			const oldestKey = this.#memoryCache.keys().next().value!;
+			this.#memoryCacheBytes -= this.#memoryCache.get(oldestKey)!.bytes;
+			this.#memoryCache.delete(oldestKey);
+		}
+
+		this.#memoryCache.set(key, { value, bytes });
+		this.#memoryCacheBytes += bytes;
 	}
 
 	/**
 	 * Shared by `get`/`getAsync`: memory, then not-yet-flushed writes.
 	 * @param key The key to retrieve from the cache.
 	 * @returns The cached value if found, otherwise undefined.
+	 * @param identity Exact request fields required for a verified hit.
 	 */
-	#getLocal(key: string) {
+	#getLocal(key: string, identity?: RequestIdentity) {
 		const memoryCacheHit = this.#memoryCache.get(key);
-		if (memoryCacheHit) { return memoryCacheHit }
+		if (memoryCacheHit && (!identity || (typeof identity === 'string' ? memoryCacheHit.value.identity === identity : Array.isArray(memoryCacheHit.value.identity) && memoryCacheHit.value.identity.length === identity.length && identity.every((part, index) => part === memoryCacheHit.value.identity![index])))) { return memoryCacheHit.value }
 
 		// Queued but not yet on disk: reading the file would fail and the entry
 		// would be discarded as corrupt.
-		const pendingHit = this.#pendingWrites.get(key);
-		if (pendingHit) {
-			this.#setMemory(key, pendingHit);
-			return pendingHit;
+		const pending = this.#pendingWrites.get(key);
+		if (pending !== undefined) {
+			const pendingHit = this.#decodeEntry(pending.serialized, identity);
+			if (pendingHit !== undefined) {
+				this.#setMemory(key, pendingHit, pending.bytes);
+				return pendingHit;
+			}
 		}
 
 		return undefined;
+	}
+
+	/**
+	 * Verifies the request header before decoding the transformed payload.
+	 * @param serialized Complete disk or pending payload.
+	 * @param identity Exact request fields required for a verified hit.
+	 */
+	#decodeEntry(serialized: string, identity?: RequestIdentity) {
+		if (!identity) { return Json.decode(serialized, this.#decode) }
+
+		const prefix = `{"identity":${typeof identity === 'string' ? identity : JSON.stringify(identity)},"value":`;
+
+		if (!serialized.startsWith(prefix) || !serialized.endsWith('}')) { return undefined }
+
+		const result = Json.decode(serialized.slice(prefix.length, -1), this.#decode);
+
+		if (result) { result.identity = identity }
+
+		return result;
 	}
 
 	/**
@@ -329,40 +394,38 @@ class FileCache<T> implements Cache<T> {
 	 * @param cachedResult The cached value retrieved from disk.
 	 * @returns The cached value if found, otherwise undefined.
 	 */
-	#acceptDiskHit(key: string, cachedResult: T | undefined) {
+	#acceptDiskHit(key: string, cachedResult: { value: T; bytes: number } | undefined) {
 		if (!cachedResult) { return undefined }
 
 		// Load it into memory
-		this.#setMemory(key, cachedResult);
-		this.#scheduleMaintenance();
+		this.#setMemory(key, cachedResult.value, cachedResult.bytes);
+		if (!this.#cacheDirectoryWasMissing) { this.#scheduleMaintenance() }
 
-		return cachedResult;
+		return cachedResult.value;
 	}
 
 	/**
 	 * Reads and parses one entry from disk.
 	 *
-	 * A missing file is an ordinary miss, not corruption. Unlinking on every miss
-	 * cost a wasted syscall per module on cold runs (~4.4ms for 300 modules in a
-	 * CPU profile), so only entries that exist but cannot be read are removed.
+	 * Invalid entries are misses; deleting them could race an atomic replacement.
 	 * @param key The key to retrieve from the cache.
 	 * @returns The cached value if found, otherwise undefined.
+	 * @param identity Exact request fields required for a verified hit.
 	 */
-	#readDiskEntry(key: string) {
+	#readDiskEntry(key: string, identity?: RequestIdentity) {
 		if (!this.#canReadDisk()) { return undefined }
 
 		const filePath = this.#cacheFilePath(key);
+		if (this.#cacheDirectoryWasMissing && !existsSync(filePath)) { return undefined }
 
 		try {
-			const decoded = Json.decode(readFileSync(filePath, 'utf8'), this.#decode);
+			const serialized = readFileSync(filePath, encoding);
+			const decoded = this.#decodeEntry(serialized, identity);
+
 			if (decoded === undefined) { throw new TypeError('Invalid cache entry') }
 
-			return decoded;
-		} catch (error) {
-			if (!hasErrorCode(error, 'ENOENT')) {
-				unlink(filePath).catch(noop);
-			}
-
+			return { value: decoded, bytes: Buffer.byteLength(serialized, encoding) };
+		} catch {
 			return undefined;
 		}
 	}
@@ -371,22 +434,20 @@ class FileCache<T> implements Cache<T> {
 	 * Reads and parses one entry from disk asynchronously.
 	 * @param key The key to retrieve from the cache.
 	 * @returns The cached value if found, otherwise undefined.
+	 * @param identity Exact request fields required for a verified hit.
 	 */
-	async #readDiskEntryAsync(key: string) {
+	async #readDiskEntryAsync(key: string, identity?: RequestIdentity) {
 		if (!this.#canReadDisk()) { return undefined }
 
 		const filePath = this.#cacheFilePath(key);
 
 		try {
-			const decoded = Json.decode(await readFile(filePath, 'utf8'), this.#decode);
+			const serialized = await readFile(filePath, encoding);
+			const decoded = this.#decodeEntry(serialized, identity);
 			if (decoded === undefined) { throw new TypeError('Invalid cache entry') }
 
-			return decoded;
-		} catch (error) {
-			if (!hasErrorCode(error, 'ENOENT')) {
-				unlink(filePath).catch(noop);
-			}
-
+			return { value: decoded, bytes: Buffer.byteLength(serialized, encoding) };
+		} catch {
 			return undefined;
 		}
 	}
@@ -416,9 +477,9 @@ class FileCache<T> implements Cache<T> {
 	/**
 	 * Drains queued entries.
 	 *
-	 * Writes are synchronous by design. The deferral to `setImmediate` is what
-	 * keeps them out of the (synchronous) load hook; making the writes
-	 * themselves async only added libuv thread pool dispatch overhead, which
+	 * Writes are synchronous by design. Batches normally wait for `setImmediate`,
+	 * but overflow drains during loading to bound retention without losing entries.
+	 * Making writes async only added libuv thread pool dispatch overhead, which
 	 * measured ~17ms for 100 small files versus ~1.2ms synchronously, and kept
 	 * the event loop open until it drained.
 	 */
@@ -437,6 +498,7 @@ class FileCache<T> implements Cache<T> {
 
 		const queued = [...this.#pendingWrites];
 		this.#pendingWrites.clear();
+		this.#pendingWriteBytes = 0;
 
 		try {
 			this.#ensureCacheDirectorySync();
@@ -444,12 +506,36 @@ class FileCache<T> implements Cache<T> {
 			return;
 		}
 
-		for (const [ key, value ] of queued) {
+		for (const [ key, { serialized, bytes } ] of queued) {
+			const filePath = this.#cacheFilePath(key);
+			this.#temporarySuffix ??= `${process.pid}-${Math.random().toString(36).slice(2)}`;
+			const temporaryPath = `${filePath}.${this.#temporarySuffix}-${this.#temporarySequence++}.tmp`;
+			let descriptor: number | undefined;
+			let created = false;
+
 			try {
-				const filePath = this.#cacheFilePath(key);
-				writeFileSync(filePath, JSON.stringify(value), { mode: 0o600 });
-				try { chmodSync(filePath, 0o600) } catch { /* Best-effort. A failed chmod should not discard an otherwise valid write. */ }
-			} catch { /* ignored */ }
+				descriptor = openSync(temporaryPath, 'wx', 0o600);
+				created = true;
+				let written = writeSync(descriptor, serialized);
+
+				if (written !== bytes) {
+					const buffer = Buffer.from(serialized, encoding);
+					while (written < bytes) {
+						const progress = writeSync(descriptor, buffer, written, bytes - written);
+						if (progress === 0) { throw new Error('Incomplete cache write') }
+						written += progress;
+					}
+				}
+
+				closeSync(descriptor);
+				descriptor = undefined;
+				renameSync(temporaryPath, filePath);
+				created = false;
+			} catch { /* ignored */ } finally {
+				if (descriptor !== undefined) { try { closeSync(descriptor) } catch { /* ignored */ } }
+
+				if (created) { try { unlinkSync(temporaryPath) } catch { /* ignored */ } }
+			}
 		}
 	}
 
@@ -493,8 +579,6 @@ class FileCache<T> implements Cache<T> {
 	}
 }
 
-const hasErrorCode = (error: unknown, code: string) => error !== null && typeof error === 'object' && 'code' in error && error.code === code;
-
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
 
 const isRecord = (value: unknown): value is Record<PropertyKey, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -522,17 +606,40 @@ const decodeSourceMap = (value: unknown): Transformed['map'] => {
 	return sourceMap;
 };
 
-const decodeTransformed = (value: unknown): Transformed | undefined => {
+const decodeTransformed = (value: unknown): CachedTransform | undefined => {
 	if (!isRecord(value)) { return undefined }
 
 	const code = value['code'];
+
 	if (typeof code !== 'string') { return undefined }
 
+	const identity = value['identity'];
+
+	if (identity !== undefined && !isStringArray(identity)) { return undefined }
+
+	const transformed: CachedTransform = { code };
+
+	if (identity !== undefined) { transformed.identity = identity }
+
 	const rawMap = value['map'];
-	if (rawMap === undefined) { return { code } }
+
+	if (rawMap === undefined) { return transformed }
 
 	const map = decodeSourceMap(rawMap);
-	return map ? { code, map } : undefined;
+
+	if (!map) { return undefined }
+
+	transformed.map = map;
+
+	return transformed;
 };
 
-export default (process.env['TSNODE_DISABLE_CACHE'] ? new Map<string, Transformed>() : new FileCache(decodeTransformed));
+const disabledCache: Cache<CachedTransform> & { getAsync: (key: string) => Promise<undefined> } = {
+	get: (_key: string) => undefined,
+	getAsync: (_key: string) => Promise.resolve(undefined),
+	set: (_key: string, _value: CachedTransform) => disabledCache,
+	has: (_key: string) => false,
+	clear: noop
+};
+
+export default (process.env['TSNODE_DISABLE_CACHE'] ? disabledCache : new FileCache(decodeTransformed));

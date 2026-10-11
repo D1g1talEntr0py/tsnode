@@ -75,7 +75,7 @@ export const patchTransformResult = (result: TransformResult, sourcefile: string
 		}
 
 		// esbuild owns this JSON string and guarantees the source-map schema in TransformResult.
-		sourceMap = Json.parse(result.map) as SourceMap;
+		sourceMap = Json.parse<SourceMap>(result.map);
 	}
 
 	return { code: result.code, map: sourceMap };

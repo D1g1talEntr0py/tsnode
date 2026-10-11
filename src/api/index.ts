@@ -1,7 +1,49 @@
 import { register, registerScoped } from './register';
-import type { ModuleNamespace, ModuleImport, TsImportOptions } from '../types';
+import { resolve } from 'node:path';
+import { getTsconfigCacheKey } from '../utils/tsconfig';
+import type { ModuleNamespace, ModuleImport, TsImportOptions, NamespacedUnregister } from '../types';
 
 let nextImportNamespace = 0;
+let nextOptionIdentity = 0;
+const optionIdentities = new WeakMap<object, number>();
+const scopeCacheLimit = 64;
+type ImportScope = { key: string; handle: NamespacedUnregister; pending: number; successful: boolean };
+const importScopes = new Map<string, ImportScope>();
+const retainedScopes = new Set<ImportScope>();
+
+const findImportScope = (key: string) => {
+	const cached = importScopes.get(key);
+	if (cached) { return cached }
+	for (const scope of retainedScopes) {
+		if (scope.key === key) { return scope }
+	}
+	return undefined;
+};
+
+const getOptionIdentity = (option: object | undefined) => {
+	if (!option) { return 0 }
+	let identity = optionIdentities.get(option);
+	if (identity === undefined) {
+		identity = nextOptionIdentity += 1;
+		optionIdentities.set(option, identity);
+	}
+	return identity;
+};
+
+const finishImport = (key: string, scope: ImportScope, successful: boolean) => {
+	scope.pending -= 1;
+	scope.successful ||= successful;
+	if (successful) { retainedScopes.add(scope) }
+	if (scope.pending === 0 && !scope.successful) {
+		if (importScopes.get(key) === scope) { importScopes.delete(key) }
+		scope.handle.unregister();
+	}
+	if (importScopes.size <= scopeCacheLimit) { return }
+	for (const [cachedKey, cachedScope] of importScopes) {
+		if (importScopes.size <= scopeCacheLimit) { break }
+		if (cachedScope.pending === 0) { importScopes.delete(cachedKey) }
+	}
+};
 
 export { register };
 export const tsImport: ModuleImport = <TModule extends object = ModuleNamespace>(specifier: string, options: string | TsImportOptions) => {
@@ -11,9 +53,31 @@ export const tsImport: ModuleImport = <TModule extends object = ModuleNamespace>
 
 	if (typeof options === 'string') { options = { parentURL: options } }
 
-	// We don't want to unregister this after load since there can be child import() calls that need TS support.
-	// This is not accessible to others because of the namespace.
-	return registerScoped({ ...options, namespace: `tsImport-${nextImportNamespace += 1}` }).import<TModule>(specifier, options.parentURL);
+	const tsconfigOption = options.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH'];
+	const tsconfig = tsconfigOption === false ? false : resolve(tsconfigOption ?? 'tsconfig.json');
+	const key = JSON.stringify([tsconfig === false ? false : getTsconfigCacheKey(tsconfig), getOptionIdentity(options.onImport), getOptionIdentity(options.virtualSources)]);
+	let scope = findImportScope(key);
+	if (!scope) {
+		scope = { key, handle: registerScoped({ ...options, tsconfig, namespace: `tsImport-${nextImportNamespace += 1}` }), pending: 0, successful: false };
+		importScopes.set(key, scope);
+	} else {
+		importScopes.delete(key);
+		importScopes.set(key, scope);
+	}
+	scope.pending += 1;
+	const currentScope = scope;
+	try {
+		return scope.handle.import<TModule>(specifier, options.parentURL).then(module => {
+			finishImport(key, currentScope, true);
+			return module;
+		}, (error: unknown) => {
+			finishImport(key, currentScope, false);
+			throw error;
+		});
+	} catch (error) {
+		finishImport(key, currentScope, false);
+		throw error;
+	}
 };
 
-export type { ModuleNamespace, NamespacedUnregister, Register, RegisterHandle, RegisterOptions, ScopedImport, ModuleImport, TsImportOptions, Unregister } from '../types';
+export type { ModuleNamespace, NamespacedUnregister, OnImport, Register, RegisterHandle, RegisterOptions, ScopedImport, ModuleImport, TsImportOptions, Unregister } from '../types';

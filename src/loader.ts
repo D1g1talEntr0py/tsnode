@@ -10,6 +10,7 @@ export type {
 	ModuleNamespace,
 	NamespacedUnregister,
 	NodeError,
+	OnImport,
 	Register,
 	RegisterHandle,
 	RegisterOptions,
