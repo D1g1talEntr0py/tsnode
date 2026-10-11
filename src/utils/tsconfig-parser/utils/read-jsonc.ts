@@ -1,6 +1,6 @@
 import { parse } from 'jsonc-parser';
 import { readFile } from './fs-cached';
-import { encoding } from 'src/utils/constants';
+import { encoding } from '../../../utils/constants';
 import type { ParseError } from 'jsonc-parser';
 import type { Cache } from '../types';
 

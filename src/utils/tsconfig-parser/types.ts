@@ -1,5 +1,6 @@
 import type { TsconfigRaw } from 'esbuild';
 import type { TypeScriptVersion } from './utils/typescript-semantics';
+import type { Expand } from '../../types';
 
 export type { TypeScriptVersion };
 
@@ -34,7 +35,7 @@ export type WatchOptions = {
 };
 
 /** A tsconfig after `extends` has been merged; unknown top-level fields are preserved. */
-export type TsConfigJsonResolved = {
+export type TypeScriptOptions = {
 	[field: string]: unknown;
 	compilerOptions?: CompilerOptions;
 	exclude?: string[];
@@ -45,10 +46,9 @@ export type TsConfigJsonResolved = {
 };
 
 /** The subset of tsconfig.json the parser reads. */
-export type TsConfigJson = TsConfigJsonResolved & { extends?: string | string[] };
+export type TypeScriptConfig = Expand<TypeScriptOptions & { extends?: string | string[] }>;
 
 export type TsConfigResult = {
-
 	/**
 	 * The path to the tsconfig.json file
 	 */
@@ -57,7 +57,7 @@ export type TsConfigResult = {
 	/**
 	 * The resolved tsconfig.json file
 	 */
-	config: TsConfigJsonResolved;
+	config: TypeScriptOptions;
 };
 
 export type PathsMatcher = (specifier: string) => string[];

@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { parseTsconfig, type ParseTsconfigOptions, type TsConfigJson, type TsConfigResult } from '../../../src/utils/tsconfig-parser';
+import { parseTsconfig, type ParseTsconfigOptions, type TypeScriptConfig, type TsConfigResult } from '../../../src/utils/tsconfig-parser';
 import { findUp } from '../../../src/utils/tsconfig-parser/utils/find-up';
 import { toPosixPath } from '../../../src/utils/tsconfig-parser/utils/to-posix-path';
 
 export const createTsconfigJson = (
-	tsconfig: TsConfigJson
+	tsconfig: TypeScriptConfig
 ) => JSON.stringify(tsconfig);
 
 export const createPackageJson = (

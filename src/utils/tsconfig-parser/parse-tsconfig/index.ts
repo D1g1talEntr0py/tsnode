@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { CompilerOptions, TsConfigJson, TsConfigJsonResolved, Cache, ParseTsconfigOptions } from '../types';
+import type { CompilerOptions, TypeScriptConfig, TypeScriptOptions, Cache, ParseTsconfigOptions } from '../types';
 import { normalizeRelativePath } from '../utils/normalize-relative-path';
 import { toPosixPath } from '../utils/to-posix-path';
 import { readJsonc } from '../utils/read-jsonc';
@@ -132,7 +132,7 @@ const outputFields = [
  * @param isExtendedConfig Indicates if the config is an extended config.
  * @returns The resolved and merged tsconfig object.
  */
-const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConfiguration, cache?: Cache, circularExtendsTracker = new Set<string>(), isExtendedConfig = false): TsConfigJsonResolved => {
+const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConfiguration, cache?: Cache, circularExtendsTracker = new Set<string>(), isExtendedConfig = false): TypeScriptOptions => {
 	/**
 	 * Decided not to cache the TsConfigJsonResolved object because it's
 	 * mutable.
@@ -143,9 +143,9 @@ const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConf
 	 *
 	 * By only caching fs results, we can avoid serving mutated objects
 	 */
-	let config: TsConfigJson;
+	let config: TypeScriptConfig;
 	try {
-		config = readJsonc(tsconfigPath, cache) as TsConfigJson;
+		config = readJsonc(tsconfigPath, cache) as TypeScriptConfig;
 	} catch (error) {
 		throw new Error(`Cannot resolve tsconfig at path: ${tsconfigPath}`, { cause: error });
 	}
@@ -359,7 +359,7 @@ const normalizeCompilerOptions = (compilerOptions: CompilerOptions, semantics: T
  * @param options.typeScriptVersion - TypeScript major version whose semantics to apply (default: `6`).
  * @returns The parsed and resolved tsconfig JSON.
  */
-export const parseTsconfig = (tsconfigPath: string,	{ cache = new Map(), typeScriptVersion }: ParseTsconfigOptions = {}): TsConfigJsonResolved => {
+export const parseTsconfig = (tsconfigPath: string,	{ cache = new Map(), typeScriptVersion }: ParseTsconfigOptions = {}): TypeScriptOptions => {
 	const semantics = getTypeScriptSemantics(typeScriptVersion);
 	const resolvedTsconfigPath = path.resolve(tsconfigPath);
 	const config = _parseTsconfig(resolvedTsconfigPath, semantics, cache);
