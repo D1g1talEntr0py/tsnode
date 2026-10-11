@@ -614,6 +614,8 @@ References:
 
 This fork is optimized for fast ESM execution.
 
+Entrypoints enable Node's V8 compile cache early unless `NODE_DISABLE_COMPILE_CACHE=1`. This is separate from the transform cache. Transform keys use SHA-256 over source, transform options, and tool/runtime version salts. In-memory results and pending disk payloads are each capped at 64 entries / 8 MiB; disk publication is best-effort and atomic via temporary files and rename, with up to 2000 writes per process. Cache failures fall back to transformation instead of failing execution.
+
 Practical guidance:
 
 - warm runs usually benefit from cache reuse
