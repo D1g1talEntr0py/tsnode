@@ -1,5 +1,6 @@
 import { spawn, type StdioOptions } from 'node:child_process';
 import type { RunOptions } from './types';
+import { inheritedExecArgv } from './remove-argv-flags';
 
 const shouldPatchRepl = (argv: string[]) => {
 	for (const flag of argv) {
@@ -44,5 +45,5 @@ export const run = (argv: string[], options?: RunOptions) => {
 		...argv
 	];
 
-	return spawn(process.execPath, args, { stdio, env: spawnEnv });
+	return spawn(process.execPath, [ ...inheritedExecArgv(process.execArgv, args), ...args ], { stdio, env: spawnEnv });
 };

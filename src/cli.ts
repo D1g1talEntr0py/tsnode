@@ -1,12 +1,11 @@
 import { constants } from 'node:os';
 import { enableCompileCache } from 'node:module';
+import { noop } from './utils/constants';
+import { normalizeFileUrlPath, resolveEntrypointPath, entryUsesImportMetaMain, hasImportMetaMain } from './utils/path-utils';
 import type { Server } from 'node:net';
 import type { Flags } from './types';
 import type { ParseArgsOptionsConfig } from 'node:util';
 import type { ChildProcess, Serializable } from 'node:child_process';
-import { normalizeFileUrlPath, resolveEntrypointPath, entryUsesImportMetaMain } from './utils/path-utils';
-
-type RunInProcess = typeof import('./run-eval-in-process')['runEvalInProcess'];
 
 if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
@@ -14,15 +13,7 @@ if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 
 const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 	let waitForSignal: ((signal: NodeJS.Signals) => void) | undefined;
-	const isSignalMessage = (data: unknown): data is { type: 'signal', signal: NodeJS.Signals } => (
-		data !== null
-		&& typeof data === 'object'
-		&& 'type' in data
-		&& data.type === 'signal'
-		&& 'signal' in data
-		&& typeof data.signal === 'string'
-		&& Object.hasOwn(constants.signals, data.signal)
-	);
+	const isSignalMessage = (data: unknown): data is { type: 'signal', signal: NodeJS.Signals } => (data !== null && typeof data === 'object' && 'type' in data && data.type === 'signal' && 'signal' in data && typeof data.signal === 'string' && Object.hasOwn(constants.signals, data.signal));
 
 	ipcSocket.on('data', (data: unknown) => {
 		if (isSignalMessage(data) && waitForSignal) { waitForSignal(data.signal) }
@@ -42,7 +33,7 @@ const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 			waitForSignal = resolve;
 		});
 
-		signalWaitPromise.then(() => waitForSignal = undefined, () => {});
+		signalWaitPromise.then(() => waitForSignal = undefined, noop);
 
 		return signalWaitPromise;
 	};
@@ -57,14 +48,12 @@ const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 			 *
 			 * The preflight registers a signal handler on the child to
 			 * tell the parent if it also received a signal which we wait for here
-			 */
-			const signalFromChild = await waitForSignalFromChild();
-			/**
+			 *
 			 * If child didn't receive a signal, it's either because it was
 			 * sent to the parent directly via kill PID or the child is
 			 * unresponsive (e.g. infinite loop). Relay signal to child.
 			 */
-			if (signalFromChild !== signal) {
+			if (await waitForSignalFromChild() !== signal) {
 				childProcess.kill(signal);
 
 				// If child is unresponsive (e.g. infinite loop), we need to force kill it
@@ -108,9 +97,7 @@ const tsnodeFlags = {
  * Only flags where the runtime API is a genuine, non-approximated equivalent belong here; anything requiring
  * a real bootstrap (--inspect, --experimental-*, --conditions, --loader, --require, V8 flags, etc.) must keep forking.
  */
-const RUNTIME_EQUIVALENT_FLAG_ENV = {
-	'--enable-source-maps': 'TSNODE_SOURCE_MAPS'
-} satisfies Record<string, string>;
+const RUNTIME_EQUIVALENT_FLAG_ENV = { '--enable-source-maps': 'TSNODE_SOURCE_MAPS' };
 
 type RuntimeEquivalentFlag = keyof typeof RUNTIME_EQUIVALENT_FLAG_ENV;
 
@@ -119,6 +106,7 @@ const isRuntimeEquivalentFlag = (flag: string): flag is RuntimeEquivalentFlag =>
 const extractRuntimeEquivalentLeadingFlags = (argv: string[]) => {
 	let flags: RuntimeEquivalentFlag[] | undefined;
 	let index = 0;
+
 	while (index < argv.length) {
 		const argument = argv[index];
 		if (argument === undefined || !argument.startsWith('-')) { break }
@@ -224,7 +212,7 @@ if (rawArgv[0] === 'watch') {
 	await (await import('./watch/index.js')).runWatchCommand(rawArgv.slice(1));
 	process.exitCode ??= 0;
 } else {
-	const { findFirstPositionalIndex, removeArgvFlags } = await import('./remove-argv-flags');
+	const { findFirstPositionalIndex, removeArgvFlags, canForwardWorkerExecArgv } = await import('./remove-argv-flags');
 	const firstPositionalIndex = findFirstPositionalIndex(executionFlags, rawArgv);
 
 	// `tsnode <script>` with no leading flags has nothing to parse. Skipping the
@@ -246,19 +234,15 @@ if (rawArgv[0] === 'watch') {
 	const evalInput = getEvalInput(values);
 	const evalScriptArgv = evalInput ? [ ...argvFlagsToRun ] : [];
 	let transformedEvalCode: string | undefined;
-	let transformedPrintCode: string | undefined;
 
 	if (evalInput) {
 		// Lazy import so the CLI parent process doesn't pay esbuild's module init cost on every run (transforms happen in the child process)
-		const transformed = (await import('esbuild')).transformSync(evalInput.code, { loader: 'ts', sourcefile: '/eval.ts', ...(evalInput.type === 'eval' ? { format: 'esm' as const } : {}) });
-		if (evalInput.type === 'eval') {
-			transformedEvalCode = transformed.code;
-		} else {
-			transformedPrintCode = transformed.code;
-		}
+		const transformed = (await import('esbuild')).transformSync(evalInput.code, { loader: 'ts', sourcefile: '/eval.ts', ...(evalInput.type === 'eval' ? { format: 'esm' } : {}) });
 
-		argvFlagsToRun.unshift(`--${evalInput.type}`, transformed.code);
-		if (evalInput.type === 'eval' && values['input-type'] !== 'module') { argvFlagsToRun.unshift('--input-type=module') }
+		if (evalInput.type === 'eval') { transformedEvalCode = transformed.code }
+
+		argvFlagsToRun.unshift(`--${evalInput.type}`, evalInput.type === 'eval' ? `${transformed.code}\nexport {};` : transformed.code);
+		if (evalInput.type === 'eval' && hasImportMetaMain(evalInput.code) && values['input-type'] === undefined) { argvFlagsToRun.unshift('--input-type=module') }
 	}
 
 	// Default --test glob to find TypeScript files
@@ -276,14 +260,14 @@ if (rawArgv[0] === 'watch') {
 	 * canonical argv so both the in-process and fork paths receive the same entry representation.
 	 */
 	const runtimeEquivalentLeadingFlags = extractRuntimeEquivalentLeadingFlags(argvFlagsToRun);
-	const entryArgvIndex = (runtimeEquivalentLeadingFlags?.flags.length ?? 0) + (argvFlagsToRun[runtimeEquivalentLeadingFlags?.flags.length ?? 0] === '--' ? 1 : 0);
+	const entryArgvIndex = findFirstPositionalIndex(executionFlags, argvFlagsToRun);
 	const firstRunArgument = argvFlagsToRun[entryArgvIndex];
 	const normalizedFirstRunArgument = firstRunArgument && !firstRunArgument.startsWith('-') ? normalizeFileUrlPath(firstRunArgument) : firstRunArgument;
 	const resolvedEntrypointPath = normalizedFirstRunArgument && !normalizedFirstRunArgument.startsWith('-') ? resolveEntrypointPath(normalizedFirstRunArgument) : undefined;
 
 	if (normalizedFirstRunArgument !== firstRunArgument && normalizedFirstRunArgument !== undefined) { argvFlagsToRun[entryArgvIndex] = normalizedFirstRunArgument }
 
-	const candidateArgv = runtimeEquivalentLeadingFlags ? argvFlagsToRun.slice(entryArgvIndex) : argvFlagsToRun;
+	const candidateArgv = runtimeEquivalentLeadingFlags || argvFlagsToRun[0] === '--' ? argvFlagsToRun.slice(entryArgvIndex) : argvFlagsToRun;
 	const startsWithDash = (argument: string) => argument.startsWith('-');
 
 	/**
@@ -301,8 +285,8 @@ if (rawArgv[0] === 'watch') {
 	 *   the actual process entry point and can never be true for a dynamically
 	 *   imported module, so such entries must be forked to behave correctly
 	 */
-	const canRunInProcess = (process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && normalizedFirstRunArgument !== undefined && !normalizedFirstRunArgument.startsWith('-') && !process.send && resolvedEntrypointPath !== undefined && !entryUsesImportMetaMain(resolvedEntrypointPath));
-	const canRunEvalInProcess = process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && (transformedEvalCode !== undefined || transformedPrintCode !== undefined) && !values.test && !process.send && !evalScriptArgv.some(startsWithDash);
+	const canRunInProcess = (canForwardWorkerExecArgv(process.execArgv) && process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && !evalInput && !values.test && firstPositionalIndex !== -1 && candidateArgv[0] !== undefined && !candidateArgv[0].startsWith('-') && !process.send && resolvedEntrypointPath !== undefined && !entryUsesImportMetaMain(resolvedEntrypointPath));
+	const canRunEvalInProcess = canForwardWorkerExecArgv(process.execArgv) && process.env['TSNODE_DISABLE_IN_PROCESS'] !== '1' && !values.version && !values.help && transformedEvalCode !== undefined && !hasImportMetaMain(evalInput?.code ?? '') && !values.test && !process.send && !evalScriptArgv.some(startsWithDash);
 
 	if (canRunInProcess) {
 		// Consumed at module-init time by the cache and tsconfig loaders, so it must be set before the loader graph is imported.
@@ -312,21 +296,17 @@ if (rawArgv[0] === 'watch') {
 
 		await (await import('./run-in-process')).runInProcess(candidateArgv, resolvedEntrypointPath);
 	} else if (canRunEvalInProcess) {
-		const evalModule: { runEvalInProcess: RunInProcess, runPrintInProcess: RunInProcess } = await import('./run-eval-in-process');
-
-		if (transformedPrintCode !== undefined) {
-			await evalModule.runPrintInProcess(transformedPrintCode, evalScriptArgv);
-		} else if (transformedEvalCode !== undefined)	 {
-			await evalModule.runEvalInProcess(transformedEvalCode, evalScriptArgv);
-		}
+		if (values['no-cache']) { process.env['TSNODE_DISABLE_CACHE'] = '1' }
+		if (typeof values.tsconfig === 'string') { process.env['TSNODE_TSCONFIG_PATH'] = values.tsconfig }
+		if (transformedEvalCode !== undefined) { await (await import('./run-eval-in-process')).runEvalInProcess(transformedEvalCode, evalScriptArgv) }
 	} else {
-		const shouldRelaySignals = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
+		const signalRelay = (process.env['TSNODE_DISABLE_SIGNAL_RELAY'] !== '1' && (process.env['TSNODE_FORCE_SIGNAL_RELAY'] === '1' || process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY));
 		// The child can't be spawned until the socket is listening, so overlap `./run` (node:child_process) with that setup.
-		const ipcPromise = shouldRelaySignals ? import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
+		const ipcPromise = signalRelay ? import('./utils/ipc/server').then(({ createIpcServer }) => createIpcServer()) : undefined;
 		const { run } = await import('./run');
 		const ipc = await ipcPromise;
 
-		const childProcess = run(argvFlagsToRun, { noCache: Boolean(values['no-cache']), signalRelay: shouldRelaySignals, tsconfigPath: values.tsconfig });
+		const childProcess = run(argvFlagsToRun, { noCache: Boolean(values['no-cache']), signalRelay, tsconfigPath: values.tsconfig });
 
 		if (ipc) { relaySignals(childProcess, ipc) }
 

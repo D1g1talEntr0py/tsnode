@@ -17,7 +17,7 @@ import { isFilePath, normalizeFileUrlPath } from './utils/path-utils';
  * So `Worker` is separately patched below to explicitly forward the (now
  * up-to-date) `process.execArgv` when the caller didn't provide their own.
  */
-const ensureLoaderInheritedByChildren = () => {
+export const ensureLoaderInheritedByChildren = () => {
 	const loaderImportUrl = new URL('./loader.js', import.meta.url).href;
 	const canonicalizeImportSpecifier = (specifier: string) => isFilePath(specifier) || specifier.startsWith('file://') ? pathToFileURL(path.resolve(normalizeFileUrlPath(specifier))).href : specifier;
 	const canonicalLoaderImportUrl = canonicalizeImportSpecifier(loaderImportUrl);
@@ -38,7 +38,7 @@ const ensureLoaderInheritedByChildren = () => {
 		 */
 		class TsnodeWorker extends OriginalWorker {
 			constructor(filename: string | URL, options?: WorkerOptions) {
-				super(filename, options?.execArgv ? options : { ...options, execArgv: [ ...process.execArgv ] });
+				super(filename, options?.execArgv !== undefined ? options : { ...options, execArgv: [ ...process.execArgv ] });
 			}
 		}
 

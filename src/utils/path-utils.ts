@@ -1,6 +1,7 @@
-import path from 'node:path';
-import { readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { encoding } from '../utils/constants';
+import { readFileSync, statSync } from 'node:fs';
+import { isAbsolute, resolve, join, sep } from 'node:path';
 
 /**
  * Prior to calling this function, it's expected that Windows paths have been filtered out
@@ -17,7 +18,7 @@ const getScheme = (url: string) => {
 };
 
 export const isRelativePath = (request: string) => request[0] === '.' && (request[1] === '/' || (request[1] === '.' && request[2] === '/'));
-export const isFilePath = (request: string) => (isRelativePath(request) || path.isAbsolute(request));
+export const isFilePath = (request: string) => (isRelativePath(request) || isAbsolute(request));
 
 // In Node, bare specifiers (packages and core modules) do not accept queries
 export const requestAcceptsQuery = (request: string) => {
@@ -25,8 +26,8 @@ export const requestAcceptsQuery = (request: string) => {
 	if (isFilePath(request)) { return true }
 
 	const scheme = getScheme(request);
-	// Expected to be file, https, etc... | node:url maps to a bare-specifier,
-	// which does not accept queries. But URLs like file:// or https:// do
+
+	// Expected to be file, https, etc... | node:url maps to a bare-specifier, which does not accept queries. But URLs like file:// or https:// do
 	return (scheme && scheme !== 'node');
 };
 
@@ -35,28 +36,21 @@ export const fileUrlPrefix = 'file://';
 export const normalizeFileUrlPath = (request: string) => {
 	if (!request.startsWith(fileUrlPrefix)) { return request }
 
-	try {
-		return fileURLToPath(request);
-	} catch {
-		return request;
-	}
+	try { return fileURLToPath(request) } catch { return request }
 };
 
 const implicitEntrypointExtensions = ['.ts', '.tsx', '.jsx', '.js', '.json'];
 
 const tryResolveFile = (candidatePath: string) => {
-	try {
-		return statSync(candidatePath).isFile() ? candidatePath : undefined;
-	} catch {
-		return undefined;
-	}
+	try { return statSync(candidatePath).isFile() ? candidatePath : undefined } catch { return undefined }
 };
 
 export const resolveEntrypointPath = (request: string) => {
 	const normalizedRequest = normalizeFileUrlPath(request);
-	const resolvedRequest = path.resolve(normalizedRequest);
+	const resolvedRequest = resolve(normalizedRequest);
 
 	const directFile = tryResolveFile(resolvedRequest);
+
 	if (directFile) { return directFile }
 
 	for (const extension of implicitEntrypointExtensions) {
@@ -65,7 +59,7 @@ export const resolveEntrypointPath = (request: string) => {
 	}
 
 	for (const extension of implicitEntrypointExtensions) {
-		const indexFile = tryResolveFile(path.join(resolvedRequest, `index${extension}`));
+		const indexFile = tryResolveFile(join(resolvedRequest, `index${extension}`));
 		if (indexFile) { return indexFile }
 	}
 
@@ -74,59 +68,99 @@ export const resolveEntrypointPath = (request: string) => {
 
 // Node only marks the actual process entry point module as import.meta.main; a dynamically `import()`-ed module
 // can never satisfy that, so entries relying on it must be forked instead of run through the in-process fast path.
-const importMetaMainPattern = /^import\s*\.\s*meta(?:\s*\.\s*main\b|\s*\[\s*(['"`])main\1\s*\])/;
+const tokenGap = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*`;
+const importMetaMainPattern = new RegExp(String.raw`^import${tokenGap}\.${tokenGap}meta\b${tokenGap}(?:\.${tokenGap}main\b|\[|(?=[;,)\s}]|$))`);
 
-const hasImportMetaMain = (source: string) => {
+/**
+ * Checks if the given source code contains a usage of import.meta.main.
+ * @param source The source code to check for import.meta.main usage.
+ * @returns True if the source code contains import.meta.main, false otherwise.
+ */
+export const hasImportMetaMain = (source: string) => {
 	let index = 0;
 	const length = source.length;
 
-	while (index < length) {
-		if (source[index] === '/' && source[index + 1] === '/') {
-			index = source.indexOf('\n', index + 2);
+	/**
+	 * Scans the source code for import.meta.main usage, taking into account template literal substitutions.
+	 * @param inSubstitution Indicates whether the current scan is within a template literal substitution.
+	 * @returns True if import.meta.main is found within the scanned code, false otherwise.
+	 */
+	const scanCode = (inSubstitution = false) => {
+		let braces = 0;
 
-			if (index === -1) { return false }
+		while (index < length) {
+			if (inSubstitution && source[index] === '}') {
+				index += 1;
 
-			continue;
-		}
+				if (braces === 0) { return false }
 
-		if (source[index] === '/' && source[index + 1] === '*') {
-			index = source.indexOf('*/', index + 2);
+				braces -= 1;
 
-			if (index === -1) { return false }
-
-			index += 2;
-
-			continue;
-		}
-
-		if (source[index] === '"' || source[index] === '\'' || source[index] === '`') {
-			const quote = source[index++];
-
-			while (index < length) {
-				if (source[index] === '\\') {
-					index += 2;
-				} else if (source[index++] === quote) {
-					break;
-				}
+				continue;
 			}
 
-			continue;
+			if (source[index] === '{') { braces += 1 }
+
+			if (source[index] === '/' && source[index + 1] === '/') {
+				index = source.indexOf('\n', index + 2);
+
+				if (index === -1) { return false }
+
+				continue;
+			}
+
+			if (source[index] === '/' && source[index + 1] === '*') {
+				index = source.indexOf('*/', index + 2);
+
+				if (index === -1) { return false }
+
+				index += 2;
+
+				continue;
+			}
+
+			if (source[index] === '`') {
+				index += 1;
+				while (index < length) {
+					if (source[index] === '\\') {
+						index += 2;
+					} else if (source[index] === '$' && source[index + 1] === '{') {
+						index += 2;
+						if (scanCode(true)) { return true }
+					} else if (source[index++] === '`') {
+						break;
+					}
+				}
+				continue;
+			}
+
+			if (source[index] === '"' || source[index] === '\'') {
+				const quote = source[index++];
+
+				while (index < length) {
+					if (source[index] === '\\') {
+						index += 2;
+					} else if (source[index++] === quote) {
+						break;
+					}
+				}
+
+				continue;
+			}
+
+			if (source.slice(index).match(importMetaMainPattern)) { return true }
+
+			index += 1;
 		}
 
-		if (source.slice(index).match(importMetaMainPattern)) { return true }
+		return false;
+	};
 
-		index += 1;
-	}
-
-	return false;
+	return scanCode();
 };
 
 export const entryUsesImportMetaMain = (entryPath: string) => {
-	try {
-		return hasImportMetaMain(readFileSync(entryPath, 'utf8'));
-	} catch {
-		return false;
-	}
+	try { return hasImportMetaMain(readFileSync(entryPath, encoding)) } catch { return false }
 };
 
 export const tsExtensions = ['.ts', '.tsx', '.jsx'];
@@ -134,7 +168,6 @@ export const tsExtensionsPattern = /\.(?:ts|[tj]sx)($|\?)/;
 export const implicitTsExtensionsPattern = /\.(?:ts|tsx|jsx)($|\?)/;
 export const isJsonPattern = /\.json($|\?)/;
 export const isDirectoryPattern = /\/(?:$|\?)/;
-// Only matches packages names without subpaths (e.g. `foo` but not `foo/bar`)
-// Back slash included to exclude Windows paths
+// Only matches packages names without subpaths (e.g. `foo` but not `foo/bar`). Back slash included to exclude Windows paths
 export const isBarePackageNamePattern = /^(?:@[^/]+\/)?[^/\\]+$/;
-export const nodeModulesPath = `${path.sep}node_modules${path.sep}`;
+export const nodeModulesPath = `${sep}node_modules${sep}`;

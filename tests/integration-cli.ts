@@ -3,10 +3,12 @@ import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { createFixture } from 'fs-fixture';
+import { childEnvironment } from './utils/fixture';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
+const executionEnvironments: Record<string, string>[] = [{}, { TSNODE_DISABLE_IN_PROCESS: '1' }];
 
 const tsconfigForFixture = {
 	'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'esnext', module: 'esnext' } }),
@@ -23,8 +25,8 @@ const collect = (childProcess: ChildProcess) => {
 	let stdout = '';
 	let stderr = '';
 
-	childProcess.stdout!.setEncoding('utf8');
-	childProcess.stderr!.setEncoding('utf8');
+	childProcess.stdout!.setEncoding('utf-8');
+	childProcess.stderr!.setEncoding('utf-8');
 	childProcess.stdout!.on('data', (chunk: string) => { stdout += chunk; });
 	childProcess.stderr!.on('data', (chunk: string) => { stderr += chunk; });
 
@@ -36,16 +38,12 @@ const collect = (childProcess: ChildProcess) => {
 	};
 };
 
-const runCli = (
-	args: string[],
-	cwd: string,
-	env?: Record<string, string>,
-) => {
-	const nodeOptions = [process.env.NODE_OPTIONS, '--experimental-strip-types', '--import', sourceResolveHookPath].filter(Boolean).join(' ');
-	const childProcess = spawn(process.execPath, [cliPath, ...args], {
+const runCli = (args: string[], cwd: string, env?: Record<string, string>, execArgv: string[] = []) => {
+	const nodeOptions = [process.env['NODE_OPTIONS'], '--experimental-strip-types', '--import', sourceResolveHookPath].filter(Boolean).join(' ');
+	const childProcess = spawn(process.execPath, [...execArgv, cliPath, ...args], {
 		cwd,
-		env: { ...process.env, NODE_OPTIONS: nodeOptions, ...env },
-		stdio: ['ignore', 'pipe', 'pipe'],
+		env: childEnvironment({ NODE_OPTIONS: nodeOptions, ...env }),
+		stdio: ['ignore', 'pipe', 'pipe']
 	});
 
 	return { childProcess, ...collect(childProcess) };
@@ -78,6 +76,115 @@ const getSourceLocation = (frame: string) => {
 };
 
 describe('cli integration', () => {
+	test.each([
+		'({ answer: 42 })',
+		'Object.assign(Object.create(null), { answer: 42 })',
+		'import("node:path").then(({ sep }) => console.log(sep))',
+	])('matches native print completion and imports: %s', async (code) => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		const native = await collect(spawn(process.execPath, ['-p', code], { cwd: fixture.path, env: childEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] })).exited;
+		for (const env of executionEnvironments) {
+			const result = await runCli(['-p', code], fixture.path, env).exited;
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.stdout).toBe(native.stdout);
+			expect(result.stderr).toBe('');
+		}
+	});
+
+	test.each([
+		'console.log(`${import.meta.main}`)',
+		'const { main } = import.meta; console.log(main)',
+		'console.log(import /* split */ . meta /* split */ . main)',
+		'console.log(import.meta["main"])',
+	])('preserves entry and eval main semantics: %s', async (code) => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }), 'main.ts': code });
+		for (const args of [['main.ts'], ['-e', code]]) {
+			for (const env of executionEnvironments) {
+				const result = await runCli(args, fixture.path, env).exited;
+				expect(result.exitCode, result.stderr).toBe(0);
+				expect(result.stdout.trim()).toBe('true');
+			}
+		}
+	});
+
+	test.each([
+		{ flags: ['--no-warnings'] },
+		{ flags: ['--conditions', 'development'] },
+		{ flags: ['--enable-source-maps'] },
+		{ flags: ['--'] },
+	])('normalizes file URLs behind leading flags $flags', async ({ flags }) => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			'main.ts': 'console.log(JSON.stringify(process.argv.slice(1)))',
+		});
+		const entryPath = path.join(fixture.path, 'main.ts');
+		for (const env of executionEnvironments) {
+			const result = await runCli(['--no-cache', ...flags, pathToFileURL(entryPath).href, '--no-cache', '--', 'arg'], fixture.path, env).exited;
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual([entryPath, '--no-cache', '--', 'arg']);
+		}
+	});
+
+	test('removes runner flags after separated Node option values in eval', async () => {
+		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		for (const env of executionEnvironments) {
+			const result = await runCli(['--conditions', 'development', '--no-cache', '-e', 'console.log(42)'], fixture.path, env).exited;
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.stdout.trim()).toBe('42');
+		}
+	});
+
+	test('applies eval config before loading enum imports and inherits hooks in Workers', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			'custom.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@value': ['./value.ts'] } } }),
+			'value.ts': 'export enum Value { Answer = 42 }',
+			'worker.ts': 'enum Value { Answer = 42 }; console.log(Value.Answer)',
+			'child.ts': 'enum Value { Answer = 42 }; console.log(Value.Answer)',
+		});
+		const code = `import { Value } from "@value"; import { Worker } from "node:worker_threads"; import { fork } from "node:child_process"; console.log(Value.Answer, process.env.TSNODE_DISABLE_CACHE); new Worker(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)})); fork(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'child.ts')).href)}))`;
+		for (const env of executionEnvironments) {
+			const result = await runCli(['--no-cache', '--tsconfig', 'custom.json', '-e', code], fixture.path, env).exited;
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.stdout.trim().split('\n')).toEqual(['42 1', '42', '42']);
+		}
+	});
+
+	test('retains parent heap flags with native default Worker inheritance', async () => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			'main.ts': 'import { Worker } from "node:worker_threads"; new Worker(new URL("./worker.ts", import.meta.url))',
+			'worker.ts': 'import { getHeapStatistics } from "node:v8"; enum Value { Answer = 42 }; console.log(JSON.stringify({ heap: getHeapStatistics().heap_size_limit, answer: Value.Answer }))',
+		});
+		const flags = ['--max-old-space-size=128', '--conditions', 'development', '--enable-source-maps'];
+		const nodeOptions = ['--experimental-strip-types', '--import', sourceResolveHookPath].join(' ');
+		const native = await collect(spawn(process.execPath, [...flags, '--import', path.join(projectRoot, 'src/loader.ts'), 'main.ts'], {
+			cwd: fixture.path, env: childEnvironment({ NODE_OPTIONS: nodeOptions }), stdio: ['ignore', 'pipe', 'pipe'],
+		})).exited;
+		expect(native.exitCode, native.stderr).toBe(0);
+		const evalCode = `import { Worker } from "node:worker_threads"; new Worker(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)}))`;
+		for (const args of [['main.ts'], ['-e', evalCode]]) {
+			for (const env of executionEnvironments) {
+				const result = await runCli(args, fixture.path, env, flags).exited;
+				expect(result.exitCode, result.stderr).toBe(0);
+				expect(result.stdout).toBe(native.stdout);
+			}
+		}
+	});
+
+	test.each([{ execArgv: [] }, { execArgv: ['--no-warnings'] }])('preserves explicit Worker execArgv $execArgv', async ({ execArgv }) => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			'main.ts': `import { Worker } from "node:worker_threads"; new Worker(new URL("./worker.js", import.meta.url), { execArgv: ${JSON.stringify(execArgv)} })`,
+			'worker.js': 'console.log(JSON.stringify(process.execArgv))',
+		});
+		for (const env of executionEnvironments) {
+			const result = await runCli(['main.ts'], fixture.path, env).exited;
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual(execArgv);
+		}
+	});
+
 	test('runs a TypeScript entry and exits cleanly', async () => {
 		await using fixture = await createFixture({
 			'package.json': JSON.stringify({ type: 'module' }),
@@ -271,6 +378,30 @@ describe('cli integration', () => {
 
 		// 128 + SIGINT(2)
 		expect((await exited).exitCode).toBe(130);
+	});
+
+	test.skipIf(process.platform === 'win32').each([
+		{ name: 'user handler', setup: 'process.on("SIGTERM", () => process.exit(23))', expected: 23 },
+		{ name: 'removed handlers', setup: 'process.removeAllListeners("SIGTERM"); console.log(process.listenerCount("SIGTERM"))', expected: 143 },
+	])('relays SIGTERM with $name', async ({ name, setup, expected }) => {
+		await using fixture = await createFixture({
+			'package.json': JSON.stringify({ type: 'module' }),
+			'main.ts': `
+				const deadline = Date.now() + 5000;
+				while (process.rawListeners('SIGTERM').length === 0) {
+					if (Date.now() > deadline) { throw new Error('relay handler not installed') }
+					await new Promise(resolve => setTimeout(resolve, 5));
+				}
+				${setup}; console.log('ready'); setInterval(() => {}, 1000);
+			`,
+		});
+		const { childProcess, read, exited } = runCli(['main.ts'], fixture.path, {
+			TSNODE_DISABLE_IN_PROCESS: '1', TSNODE_FORCE_SIGNAL_RELAY: '1', TSNODE_DISABLE_SIGNAL_RELAY: '0',
+		});
+		await waitForStdout(read, 'ready');
+		if (name === 'removed handlers') { expect(read().stdout).toContain('0\n') }
+		childProcess.kill('SIGTERM');
+		expect((await exited).exitCode).toBe(expected);
 	});
 
 	test('gives the child the env it needs to connect for signal relay', async () => {

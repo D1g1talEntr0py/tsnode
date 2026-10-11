@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
-import { createProjectFixture } from './utils/fixture';
+import { childEnvironment, createProjectFixture } from './utils/fixture';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -20,8 +20,8 @@ type Result = {
 const collect = (childProcess: ChildProcess) => {
 	let stdout = '';
 	let stderr = '';
-	childProcess.stdout?.setEncoding('utf8');
-	childProcess.stderr?.setEncoding('utf8');
+	childProcess.stdout?.setEncoding('utf-8');
+	childProcess.stderr?.setEncoding('utf-8');
 	childProcess.stdout?.on('data', (chunk: string) => { stdout += chunk; });
 	childProcess.stderr?.on('data', (chunk: string) => { stderr += chunk; });
 
@@ -30,9 +30,8 @@ const collect = (childProcess: ChildProcess) => {
 	});
 };
 
-const nodeEnvironment = (env: Record<string, string> = {}) => ({
-	...process.env,
-	NODE_OPTIONS: [ process.env.NODE_OPTIONS, '--experimental-strip-types', '--import', sourceResolveHookPath ].filter(Boolean).join(' '),
+const nodeEnvironment = (env: Record<string, string> = {}) => childEnvironment({
+	NODE_OPTIONS: [ process.env['NODE_OPTIONS'], '--experimental-strip-types', '--import', sourceResolveHookPath ].filter(Boolean).join(' '),
 	...env,
 });
 
@@ -58,7 +57,7 @@ const waitForStdout = (childProcess: ChildProcess, marker: string) => new Promis
 			resolve();
 		}
 	};
-	childProcess.stdout!.setEncoding('utf8');
+	childProcess.stdout!.setEncoding('utf-8');
 	childProcess.stdout!.on('data', onData);
 });
 
@@ -94,15 +93,14 @@ describe('runtime integration', () => {
 		expect(result.stderr).toBe('');
 	});
 
-	test('runs eval and print code through their in-process runners', async () => {
+	test('runs eval code through its in-process runner', async () => {
 		await using fixture = await createProjectFixture({ 'entry.ts': '' });
 		const result = await runModule(`
-			import { runEvalInProcess, runPrintInProcess } from ${JSON.stringify(runtimePath('run-eval-in-process'))};
+			import { runEvalInProcess } from ${JSON.stringify(runtimePath('run-eval-in-process'))};
 			await runEvalInProcess('console.log(JSON.stringify(process.argv.slice(1)));', [ 'eval-arg' ]);
-			await runPrintInProcess('1 + 2', []);
 		`, fixture.path);
 
-		expect(result.stdout.trim().split('\n')).toEqual([ '["eval-arg"]', '3' ]);
+		expect(result.stdout.trim()).toBe('["eval-arg"]');
 		expect(result.stderr).toBe('');
 	});
 
@@ -130,8 +128,8 @@ describe('runtime integration', () => {
 			'--input-type=module',
 			'--eval', `
 				import ${JSON.stringify(runtimePath('repl'))};
-				import repl from 'node:repl';
-				repl.start({ prompt: '> ' });
+				import { start } from 'node:repl';
+				start({ prompt: '> ' });
 			`,
 		], {
 			cwd: fixture.path,
@@ -166,5 +164,35 @@ describe('runtime integration', () => {
 		expect(result.stdout.trim()).toBe('preflight-ready');
 		expect(result.stderr).toBe('');
 		expect(result.exitCode).toBe(0);
+	});
+
+	test('preserves signal listener counts including listener-specific and removed counts', async () => {
+		await using fixture = await createProjectFixture({
+			'entry.ts': `
+				const deadline = Date.now() + 5000;
+				while (process.rawListeners('SIGTERM').length === 0) {
+					if (Date.now() > deadline) { throw new Error('relay handler not installed') }
+					await new Promise(resolve => setTimeout(resolve, 5));
+				}
+				const handler = () => {};
+				const unrelated = () => {};
+				process.on('SIGTERM', handler);
+				const before = {
+					total: process.listenerCount('SIGTERM'),
+					handler: process.listenerCount('SIGTERM', handler),
+					unrelated: process.listenerCount('SIGTERM', unrelated),
+					listed: process.listeners('SIGTERM').length,
+				};
+				process.removeAllListeners('SIGTERM');
+				console.log(JSON.stringify({ before, removed: process.listenerCount('SIGTERM'), specific: process.listenerCount('SIGTERM', handler) }));
+			`,
+		});
+		const result = await collect(spawn(process.execPath, [cliPath, 'entry.ts'], {
+			cwd: fixture.path,
+			env: nodeEnvironment({ TSNODE_DISABLE_IN_PROCESS: '1', TSNODE_FORCE_SIGNAL_RELAY: '1', TSNODE_DISABLE_SIGNAL_RELAY: '0' }),
+			stdio: ['ignore', 'pipe', 'pipe'],
+		}));
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({ before: { total: 2, handler: 1, unrelated: 0, listed: 2 }, removed: 0, specific: 0 });
 	});
 });

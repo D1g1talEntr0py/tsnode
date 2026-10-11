@@ -28,12 +28,13 @@ import {
 	nodeModulesPath,
 	requestAcceptsQuery,
 	entryUsesImportMetaMain,
+	hasImportMetaMain,
 	resolveEntrypointPath,
 	tsExtensions,
 	tsExtensionsPattern,
 } from '../src/utils/path-utils';
 import { getPipePath, isWindows } from '../src/utils/ipc/get-pipe-path';
-import { findFirstPositionalIndex, removeArgvFlags } from '../src/remove-argv-flags';
+import { findFirstPositionalIndex, removeArgvFlags, inheritedExecArgv } from '../src/remove-argv-flags';
 import { getFormatFromFileUrl, getNamespace, namespaceQuery, canTryNativeTypeStripping, isNativeFileUrl } from '../src/hook/utils';
 
 const flagDefinitions = {
@@ -44,7 +45,17 @@ const flagDefinitions = {
 } as const;
 
 describe('unit utilities', () => {
+	test('filters attached parent eval payloads and duplicate aliases without losing startup options', () => {
+		expect(inheritedExecArgv(['-econsole.log(1)', '-p42', '--input-type=module', '-C', 'development', '--max_old_space_size', '128'], ['--conditions=development', 'entry.ts']))
+			.toEqual(['--max_old_space_size', '128']);
+	});
+
 	describe('removeArgvFlags', () => {
+		test('skips separated Node values while removing runner flags', () => {
+			expect(removeArgvFlags({ noCache: { type: Boolean } }, ['--conditions', 'development', '--no-cache', 'input.ts', '--no-cache']))
+				.toEqual(['--conditions', 'development', 'input.ts', '--no-cache']);
+		});
+
 		test.each([
 			{
 				name: 'removes boolean long flags',
@@ -102,6 +113,11 @@ describe('unit utilities', () => {
 	});
 
 	describe('findFirstPositionalIndex', () => {
+		test('finds entries behind boolean and value Node flags', () => {
+			expect(findFirstPositionalIndex({}, ['--no-warnings', '--conditions', 'development', 'file:///entry.ts'])).toBe(3);
+			expect(findFirstPositionalIndex({}, ['-C', 'development', '--', 'entry.ts'])).toBe(3);
+		});
+
 		test.each([
 			{
 				name: 'returns -1 for flag-only argv',
@@ -139,6 +155,19 @@ describe('unit utilities', () => {
 	});
 
 	describe('path utilities', () => {
+		test.each([
+			'console.log(`${import.meta.main}`)',
+			'console.log(`${`${import.meta.main}`}`)',
+			'const { main } = import.meta; console.log(main)',
+			'console.log(import /* comment */ . meta /* comment */ . main)',
+			'console.log(import.meta["main"])',
+		])('detects main-sensitive code: %s', (source) => {
+			expect(hasImportMetaMain(source)).toBe(true);
+		});
+		test.each(['`literal import.meta.main`', '"import.meta.main"', '// import.meta.main', 'console.log(import.meta.url)'])('ignores non-main code: %s', (source) => {
+			expect(hasImportMetaMain(source)).toBe(false);
+		});
+
 		test('detects import.meta.main without matching comments or strings', () => {
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-import-meta-'));
 			const entryPath = path.join(directory, 'entry.ts');

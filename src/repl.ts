@@ -1,5 +1,6 @@
 import { transform } from 'esbuild';
 import repl, { type REPLServer, type REPLEval } from 'node:repl';
+import { syncBuiltinESMExports } from 'node:module';
 
 const patchEval = (nodeRepl: REPLServer) => {
 	const { eval: defaultEval } = nodeRepl;
@@ -37,3 +38,4 @@ const { start } = repl;
 repl.start = function(...args) {
 	return patchEval(Reflect.apply(start, this, args));
 };
+syncBuiltinESMExports();
