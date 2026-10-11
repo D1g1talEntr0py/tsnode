@@ -1,12 +1,12 @@
 import { writeSync } from 'node:fs';
 import { setColorEnabled, bgBlue, bgGray } from './ansi';
 
-export const debugEnabled = Number(process.env['TSNODE_DEBUG']);
+const debugEnabled = Number(process.env['TSNODE_DEBUG']);
 
 // Force colors in debug mode
 if (debugEnabled) { setColorEnabled(true) }
 
-export const formatDebugValue = (value: unknown): string => {
+const formatDebugValue = (value: unknown): string => {
 	if (typeof value === 'string') { return value }
 
 	if (value instanceof Error) {
@@ -45,4 +45,6 @@ const createLog = (name: string) => (level: number, ...args: unknown[]) => {
 	writeSync(1, `${`${bgGray(` tsnode P${process.pid} `)} ${name}`} ${logMessage}\n`);
 };
 
-export const logEsm = createLog(bgBlue(' ESM '));
+const logEsm = createLog(bgBlue(' ESM '));
+
+export { debugEnabled, formatDebugValue, logEsm };

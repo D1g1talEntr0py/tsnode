@@ -95,3 +95,4 @@ group('Load hook microbenchmarks', () => {
 });
 
 await run({ format: 'mitata', filter: /.*/ });
+if (!sink) { throw new Error('Hook benchmarks did not produce a result') }

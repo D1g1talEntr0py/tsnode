@@ -49,7 +49,7 @@ const readPackageBinPath = async (
 	binName: string,
 ): Promise<string> => {
 	const packageJsonPath = path.join(packageRoot, 'package.json');
-	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as {
+	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
 		bin?: string | Record<string, string>;
 	};
 
@@ -57,7 +57,7 @@ const readPackageBinPath = async (
 		return packageJson.bin;
 	}
 
-	if (packageJson.bin && binName in packageJson.bin) {
+	if (packageJson.bin?.[binName]) {
 		return packageJson.bin[binName];
 	}
 
@@ -73,7 +73,7 @@ const readPackageBinPath = async (
 
 const readPackageVersion = async (packageRoot: string): Promise<string | undefined> => {
 	const packageJsonPath = path.join(packageRoot, 'package.json');
-	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as {
+	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
 		version?: string;
 	};
 
@@ -108,8 +108,8 @@ const installAndResolveComparisonPackage = async (
 	return {
 		name: label,
 		cliPath: binPath,
-		esmLoaderPath,
-		version,
+		...(esmLoaderPath === undefined ? {} : { esmLoaderPath }),
+		...(version === undefined ? {} : { version }),
 	};
 };
 
@@ -118,17 +118,18 @@ const resolveComparisonTarget = (
 ): PackageTarget & { displayName: string; installSpecifier: string } => {
 	const match = specifier.match(comparisonSpecifierPattern);
 	if (match) {
-		const target = packageTargets[match[1]];
+		const name = match[1]!;
+		const target = packageTargets[name]!;
 		const version = match[2];
 		return {
 			...target,
-			displayName: version ? `${match[1]}@${version}` : match[1],
+			displayName: version ? `${name}@${version}` : name,
 			installSpecifier: version ? `${target.packageName}@${version}` : `${target.packageName}@latest`,
 		};
 	}
 
 	return {
-		...packageTargets.tsx,
+		...packageTargets['tsx']!,
 		displayName: `tsx@${specifier}`,
 		installSpecifier: `tsx@${specifier}`,
 	};

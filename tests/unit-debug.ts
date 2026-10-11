@@ -12,7 +12,7 @@ test('formats Error instances with their message and stack', () => {
 
 test('formats bigint and circular values safely', () => {
 	const circular: Record<string, unknown> = { a: 1 };
-	circular.self = circular;
+	circular['self'] = circular;
 
 	expect(formatDebugValue(42n)).toBe('"42n"');
 	expect(formatDebugValue(circular)).toContain('[Circular]');

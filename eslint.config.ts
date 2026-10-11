@@ -18,7 +18,7 @@ export default defineConfig({ ignores: [ 'node_modules/**', 'tests/**', 'dist/**
 			tsconfigRootDir: import.meta.dirname,
 			projectService: {
 				allowDefaultProject: [ 'scripts/build/*.ts' ],
-				defaultProject: 'tsconfig.json'
+				defaultProject: 'tsconfig.validation.json'
 			}
 		}
 	},

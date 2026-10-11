@@ -71,14 +71,6 @@ export type CachedTransformOptions = Expand<TransformOptions & {
 	tsconfigSnapshot?: { raw: TransformOptions['tsconfigRaw']; serialized: string; identity?: string };
 }>;
 
-export type ParsedTsconfig = {
-	compilerOptions: {
-		paths: Record<string, string[]>;
-		baseUrl: string;
-		allowJs: boolean;
-	};
-};
-
 export type TypeScriptConfiguration = Readonly<{
 	compilerOptions: Readonly<Omit<NonNullable<TsconfigRaw['compilerOptions']>, 'paths'> & {
 		paths: Readonly<Record<string, readonly string[]>>;
@@ -92,7 +84,7 @@ export type HookData = {
 	namespace: string | undefined;
 	onImport: OnImport | undefined;
 	virtualSources: Map<string, string> | undefined;
-	parsedTsconfig: ParsedTsconfig | undefined;
+	parsedTsconfig: TypeScriptConfiguration | undefined;
 	tsconfig: TsconfigOptions | undefined;
 };
 

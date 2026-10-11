@@ -47,7 +47,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { spawn as spawnProcess } from 'node:child_process';
-import { execa } from 'execa';
 import { createFixture } from 'fs-fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
@@ -280,7 +279,7 @@ await using installRoot = await createFixture();
 
 const readVersion = async (packageJsonPath: string): Promise<string | undefined> => {
 	try {
-		const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { version?: string };
+		const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as { version?: string };
 		return packageJson.version;
 	} catch {
 		return undefined;
@@ -293,12 +292,7 @@ const localTsnodeVersion = await readVersion(path.resolve(__dirname, '../../pack
 comparisonImplementations = await Promise.all(
 	comparisonTargets.map(async target => {
 		const implementation = await resolveComparison(target, installRoot.path);
-		return {
-			name: implementation.name,
-			cliPath: implementation.cliPath,
-			esmLoaderPath: implementation.esmLoaderPath,
-			version: implementation.version,
-		};
+		return implementation;
 	}),
 );
 
@@ -638,9 +632,9 @@ const printReportTable = (rows: ReportRow[]) => {
 	for (const { label, values } of rows) {
 		const min = Math.min(...values);
 		const max = Math.max(...values);
-		const medianStr = `${median(values).toFixed(2)} ms/iter`.padStart(15);
+		const medianStr = `${median(values)!.toFixed(2)} ms/iter`.padStart(15);
 		const rangeStr = `(${min.toFixed(2)} ms … ${max.toFixed(2)} ms)`;
-		const tailStr = `p90 ${percentile(values, 90).toFixed(2)} ms   mean ${mean(values).toFixed(2)} ms`;
+		const tailStr = `p90 ${percentile(values, 90)!.toFixed(2)} ms   mean ${mean(values).toFixed(2)} ms`;
 
 		process.stdout.write(`    ${label.padEnd(labelWidth)}  ${lightCyan(medianStr)}  ${lightCyan(renderSparkline(values))}\n`);
 		process.stdout.write(`    ${indent}  ${gray(rangeStr)}   ${gray(tailStr)}\n\n`);

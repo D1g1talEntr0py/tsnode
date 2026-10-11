@@ -192,14 +192,14 @@ for (const scenario of selectedScenarios) {
 			scenario.runner === 'node' || scenario.implementations === 'local-only'
 				? [{
 					name: scenario.runner === 'node' ? 'node' : 'local',
-					cliPath: scenario.runner === 'node' ? '' : implementations[0].cliPath,
+					cliPath: scenario.runner === 'node' ? '' : implementations[0]!.cliPath,
 				}]
 				: implementations
 		);
 		for (const { name, cliPath } of cells) {
 			for (const [index, moduleCount] of moduleCounts.entries()) {
 				log(`  ${scenario.name} · Node ${node.version} · ${name} · ${moduleCount} modules`);
-				const results = await measureCell(scenario, node, cliPath, fixtures[index].path);
+				const results = await measureCell(scenario, node, cliPath, fixtures[index]!.path);
 				rows.push({
 					scenario: scenario.name,
 					nodeVersion: node.version,
@@ -270,7 +270,7 @@ function renderTables() {
 				const [count] = moduleCounts;
 				out(`Node ${nodeVersion} — ${count} modules:`);
 				const localMean = mean(
-					(nodeRows.find(row => row.impl === 'local') ?? nodeRows[0])
+					(nodeRows.find(row => row.impl === 'local') ?? nodeRows[0]!)
 						.results.map(result => result.wallMs),
 				);
 				for (const row of nodeRows) {

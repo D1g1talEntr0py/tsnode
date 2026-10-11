@@ -47,8 +47,8 @@ export const runOnce = async (
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 
-	childProcess.stdout.setEncoding('utf8');
-	childProcess.stderr.setEncoding('utf8');
+	childProcess.stdout.setEncoding('utf-8');
+	childProcess.stderr.setEncoding('utf-8');
 	childProcess.stdout.on('data', chunk => { stdout += chunk; });
 	childProcess.stderr.on('data', chunk => { stderr += chunk; });
 
