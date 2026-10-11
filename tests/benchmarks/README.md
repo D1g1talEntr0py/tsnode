@@ -32,7 +32,7 @@ Running with no scenario names runs the **default set**. All tsnode scenarios ru
 Chosen from a full sweep. The four defaults cover distinct, high-signal axes with no redundancy:
 
 - `node-baseline` and `native-ts` are the Node floors needed to interpret the rest (native-ts also exposes tsnode's transform surface as the gap above it).
-- `hooks-passthrough` uniquely isolates the hook-registration / worker-thread tax (zero transforms).
+- `hooks-passthrough` uniquely isolates synchronous in-thread hook registration and dispatch (zero transforms, no loader worker).
 - `esm-ts` carries the transform + resolution signal (and reproduces #809).
 
 The default set remains focused on high-signal startup and transform behavior.
@@ -56,6 +56,17 @@ Progress goes to stderr; result tables / JSON to stdout.
 - **wall** — parent-measured spawn→exit; the headline, reported as mean ± stdev and **min**. Prefer min when comparing: run-to-run CV was ~6% median in the sweep, and min is the more stable statistic for startup timing.
 - **rss** (`--json` only) — peak RSS (`resourceUsage().maxRSS`). Small spread across implementations; useful for checking that loader changes do not move memory independently from wall time.
 - **load / eval split** (`--json` only) — each module timestamps its first evaluation; since ESM evaluates post-order, the earliest ≈ "graph loaded/transformed" and the entry's last ≈ "graph evaluated". Eval was a negligible share on synthetic trees, so it's recorded in JSON but kept out of the table.
+
+JSON `rss` is the instrumented child's `resourceUsage().maxRSS` in KiB, not the parent benchmark's allocations. `benchmark:compare` uses mitata, whose memory rows describe parent-process allocation during child spawning and cleanup, not child peak RSS; those allocations can differ between runners. `pnpm benchmark:memory` only prints a profiling guide and does not collect a profile.
+
+For child RSS measurements use the JSON harness, or GNU `/usr/bin/time -v` on Linux for a real workload:
+
+```sh
+pnpm --silent benchmark esm-ts --modules 1000 --runs 5 --json > results.json
+/usr/bin/time -v node dist/cli.js ./fixture.ts
+```
+
+Bash's built-in `time` and `TIMEFORMAT` do not support a `%M` peak-memory field. macOS uses `/usr/bin/time -l`, with different output and units. Keep Node version, workload, source-map settings, and cache state consistent when comparing RSS.
 
 ## Node version axis
 

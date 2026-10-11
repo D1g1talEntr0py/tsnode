@@ -64,7 +64,7 @@ This project is intentionally ESM-only. That focus removes old compatibility bra
 
 ## How tsnode works
 
-`tsnode` registers a Node loader hook. When Node requests a TypeScript module, that module is transformed on demand and executed.
+`tsnode` registers synchronous in-thread hooks with Node's `module.registerHooks()`. When Node requests a TypeScript module, native `stripTypeScriptTypes()` in strip mode handles supported erasable syntax; esbuild handles syntax requiring transformation. There is no asynchronous loader-worker fallback.
 
 Important mental model:
 
@@ -150,7 +150,7 @@ Use `tsnode` for everyday script execution and whenever you want CLI features:
 
 Use `node --import @d1g1tal/tsnode` when something else already launches Node directly and you want to preload tsnode's loader into that process — for example a test runner, another CLI, or a programmatic launcher that controls its own `node` invocation.
 
-A few scenarios still spawn a child process even from the `tsnode` CLI: leading Node flags (`--inspect`, `--enable-source-maps`, etc.), `--test`, eval/print (`-e`/`-p`), or when the parent needs to relay signals/IPC. Entries that reference `import.meta.main` are also forked automatically, since main-module identity can't be correctly reported for a dynamically imported module — this is transparent and needs no action from you.
+A few scenarios still spawn a child process even from the `tsnode` CLI: Node flags without a safe runtime equivalent (such as `--inspect`), unsafe inherited parent flags, `--test`, native print (`-p`), or when the parent needs to relay signals/IPC. Eval (`-e`) can run in-process. A leading `--enable-source-maps` alone has a runtime equivalent and does not force a fork; mixing it with unsupported flags preserves the native forked path. Entries that reference `import.meta.main` are forked automatically to preserve main-module identity.
 
 ## CLI argument rules
 
@@ -233,6 +233,8 @@ tsnode -e 'const n: number = 42; console.log(n * 2)'
 
 Use this when you need a quick experiment without creating a file.
 
+Eval can run in-process when the invocation is safe; otherwise it uses a child Node process.
+
 Real-world examples:
 
 - validating parser behavior against a sample
@@ -248,6 +250,8 @@ tsnode -p 'new Date(0).toISOString()'
 ```
 
 This is ideal for one-liner checks, shell workflows, and quick normalization logic.
+
+Print uses Node's native `--print` in a child process, preserving Node's expression and completion-value semantics rather than approximating them with eval. Node's restrictions on ESM syntax in print expressions still apply.
 
 Real-world examples:
 
@@ -304,6 +308,10 @@ tsnode watch \
   ./src/server.ts
 ```
 
+Watcher, dependency-registration, child-spawn, and IPC server errors fail the watch session with diagnostics and cleanup rather than silently losing coverage. Dependency messages are deduplicated and respect socket backpressure. The client queue is bounded to 1 MiB / 1024 messages with 64 KiB frames and reserved control capacity; dependency overflow fails watch explicitly. Stalled delivery times out after five seconds with a warning and disconnects. The server rejects invalid frame lengths or frames over 10 MiB and ignores malformed JSON.
+
+Shutdown preserves a live child's exit status, including `128 + signal` when it exits by signal. A child that has already exited by signal can be rerun or cleaned up without waiting for another exit event.
+
 ## Node test runner with TypeScript
 
 `tsnode --test` enables TypeScript execution for Node's built-in test runner.
@@ -342,6 +350,8 @@ With `node --import`, use:
 TSNODE_TSCONFIG_PATH=./configs/tsconfig.scripts.json node --import @d1g1tal/tsnode ./scripts/sync.ts
 ```
 
+Config files support JSONC comments and trailing commas, relative or package-based `extends`, and arrays of inherited configs. Inherited paths are resolved relative to their declaring config; invalid or cyclic inheritance chains do not load.
+
 ## Disable transform cache
 
 In normal use, cache improves repeated execution. During debugging, a cache-free run can be useful.
@@ -349,6 +359,8 @@ In normal use, cache improves repeated execution. During debugging, a cache-free
 ```sh
 tsnode --no-cache ./src/main.ts
 ```
+
+This bypasses transform-cache reads and writes in both the native-strip and esbuild paths; it does not delete existing cache entries. Node's separate V8 compile cache can be disabled with `NODE_DISABLE_COMPILE_CACHE=1`.
 
 Use this when:
 
@@ -426,11 +438,25 @@ Use the API when you are embedding TypeScript loading into another runtime proce
 ```ts
 import { register } from '@d1g1tal/tsnode/api';
 
-const { unregister } = register();
+{
+  using registration = register();
+  await import('./task.ts');
+}
+```
 
-await import('./task.ts');
+The handle implements `Disposable`: `using` removes its hooks when the block exits, including when an exception is thrown. TypeScript consumers need `ESNext.Disposable` in their compiler libraries. This works on Node.js 24.11.1+, without relying on the native hook handle to implement disposal.
 
-await unregister();
+Manual cleanup remains supported:
+
+```ts
+import { register } from '@d1g1tal/tsnode/api';
+
+const api = register();
+try {
+  await import('./task.ts');
+} finally {
+  api.unregister();
+}
 ```
 
 Where this is useful:
@@ -444,20 +470,20 @@ Scoped namespace example:
 ```ts
 import { register } from '@d1g1tal/tsnode/api';
 
-const api = register({ namespace: `tenant-${Date.now()}` });
-
-const moduleA = await api.import('./plugin.ts', import.meta.url);
-
 interface PluginModule {
   activate(): void;
 }
 
-const plugin = await api.import<PluginModule>('./plugin.ts', import.meta.url);
-
-await api.unregister();
+{
+  using registration = register({ namespace: `tenant-${Date.now()}` });
+  const plugin = await registration.import<PluginModule>('./plugin.ts', import.meta.url);
+  plugin.activate();
+}
 ```
 
-This helps isolate module loading between independent plugin/task runs.
+Use a distinct, nonempty namespace for each independent plugin/task run. Empty namespaces throw `TypeError`. Public registrations own independent native hook handles; unregistering one does not remove another's hooks.
+
+`unregister()` and `[Symbol.dispose]()` are the same synchronous, idempotent cleanup function. Keep the registration alive while loaded modules perform delayed dynamic imports. Cleanup removes hooks, not modules already held in Node's ESM cache; use a new namespace for fresh module identity. Namespace isolation and hook lifetime do not provide module unloading.
 
 Track imports with `onImport`:
 
@@ -519,7 +545,24 @@ await tsImport('./task.ts', {
 });
 ```
 
-Use this when you want dynamic TS imports without permanently changing unrelated runtime imports.
+Supply virtual modules as JavaScript source keyed by absolute file or custom-protocol URLs:
+
+```ts
+const virtualSources = new Map([
+  ['virtual://tasks/task.js', 'export const answer = 42;']
+]);
+const task = await tsImport<{ answer: number }>('virtual://tasks/task.js', {
+  parentURL: import.meta.url,
+  tsconfig: false,
+  virtualSources
+});
+```
+
+`register({ namespace, virtualSources })` accepts the same map. Keys omit the internal namespace query. Virtual sources are supplied as ready-to-run JavaScript, not transformed TypeScript.
+
+Equivalent config selections (including unchanged config content), the same `onImport` callback identity, and the same `virtualSources` map identity reuse a scope and therefore reuse module identity for the same resolved URL. A new callback, different map, different config selection, or changed config content selects a different scope. Mutating an existing map does not reload modules already in Node's ESM cache; use a new map for fresh identity.
+
+Successful scopes remain registered for delayed dynamic child imports. Newly created scopes whose imports all fail are released. The fast scope lookup is bounded, but successful scopes and Node's ESM module cache are retained for the process lifetime; this is not an unload API. For explicit isolation and hook cleanup, use `register({ namespace })` with distinct namespaces and `unregister()` instead of `tsImport()`.
 
 ## Source maps and debugging
 
@@ -536,6 +579,8 @@ Force source maps on for non-debug runs:
 ```sh
 TSNODE_SOURCE_MAPS=1 tsnode ./src/main.ts
 ```
+
+Registrations use Node's `module.getSourceMapsSupport()` / `module.setSourceMapsSupport()` lifecycle APIs. When tsnode enables maps, it includes dependencies and generated code, matching `process.setSourceMapsEnabled(true)`. It restores the previous `enabled`, `nodeModules`, and `generatedCode` options after its last owning registration is cleaned up. Already-enabled custom settings and later external changes through either Node setter are left untouched.
 
 ## Type-checking and compiler behavior
 
@@ -557,6 +602,8 @@ Compiler caveats inherited from esbuild:
 - `eval()` compatibility semantics are not preserved
 - only a subset of tsconfig options affect transforms
 - `emitDecoratorMetadata` is not supported
+
+Runtime configuration uses a bundled parser (`src/utils/tsconfig-parser`, derived from `get-tsconfig`) to resolve JSONC and inherited configs without loading the TypeScript compiler. It explicitly selects TypeScript 6 resolution semantics to preserve `baseUrl` support rather than adopting the library's TypeScript 7 default. Path aliases use exact-match and longest-prefix precedence, with unmatched bare imports falling back to an explicitly configured `baseUrl`. Configurations are immutable, and cache identities include the exact contents of inherited files. Malformed config syntax is rejected; transform-option interpretation is delegated to esbuild instead of a separate compiler-option validator.
 
 References:
 
@@ -632,7 +679,7 @@ No — an ordinary `tsnode file.ts` invocation runs in-process (no extra fork), 
 
 ### Why did my script just fork a child process?
 
-A handful of scenarios still spawn a child process: leading Node flags (`--inspect`, `--enable-source-maps`, etc.), `--test`, eval/print (`-e`/`-p`), an entry that references `import.meta.main`, or when the parent needs to relay signals/IPC. Ordinary script execution does not fork.
+Forks preserve semantics for unsupported leading Node flags, unsafe inherited parent flags, `--test`, native print (`-p`), entries referencing `import.meta.main`, or required signal/IPC relay. Eval can run in-process, and a leading `--enable-source-maps` alone does not force a fork. Ordinary safe script execution does not fork.
 
 ### Why does my CommonJS script not work?
 
@@ -654,7 +701,7 @@ It is a strong drop-in for ESM-first runtime workflows. It is not a drop-in for 
 
 ### Do I need typescript installed at runtime?
 
-No. Runtime transforms are handled by esbuild.
+No. Erasable syntax uses Node's native strip mode; syntax needing transformation falls back to esbuild.
 
 ### Is watch mode available through node --import?
 
@@ -680,10 +727,13 @@ This fork assumes TypeScript files execute as ESM.
 TypeScript runtime details:
 
 - no local `typescript` package is required at runtime
-- transforms are handled by esbuild (with native stripping where available)
+- native strip mode preserves locations; esbuild handles non-erasable syntax and other required transforms
+- the exact minimum runtime is Node 24.11.1; current compatibility also targets Node 26.10
 - contributors to this repository use TypeScript 6.x for type-checking
 
 ## Contributing and releases
+
+Run `pnpm lint`, `pnpm type-check`, `pnpm test`, and `pnpm build` before submitting changes. `pnpm type-check` checks both source code and the strict test, benchmark, and build-script configuration; `pnpm type-check:validation` runs just the latter. For coverage, use `NODE_DISABLE_COMPILE_CACHE=1 pnpm test:coverage`. CI validates exact Node 24.11.1 plus the current Node 24 and 26 lines.
 
 Use Conventional Commit messages. `feat` triggers a minor release; `fix`, `perf`, and `revert` trigger a patch release; a `!` marker or `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer triggers a major release. Other commit types do not trigger releases on their own, but every commit is included in the full changelog generated at release time.
 

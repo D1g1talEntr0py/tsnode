@@ -1,17 +1,12 @@
 /**
  * Memory profiling guide for the compare benchmark.
  *
- * IMPORTANT: Mitata measures parent process memory (which is identical across
- * all runners since each child process is spawned independently). This guide
- * shows how to properly measure child process memory.
+ * Mitata memory rows measure parent allocations, not child peak RSS.
+ * This script prints guidance only; it does not collect a memory profile.
  *
  * Usage:
  *   pnpm benchmark:memory
  */
-
-import path from 'node:path';
-
-const __dirname = import.meta.dirname;
 
 console.log(`
 ╔════════════════════════════════════════════════════════════════════╗
@@ -20,26 +15,33 @@ console.log(`
 
 PROBLEM:
   Mitata (used in benchmark:compare) measures PARENT process memory,
-  not the spawned child processes. This results in identical memory
-  readings (~32-40 KB) across all runners.
+  not the spawned child processes. Spawn and cleanup allocations can
+  differ between runners; those rows are not child memory measurements.
 
-SOLUTION: Use external profiling tools instead
+This command prints a guide only. It does not collect a profile.
 
-1. MEASURE PEAK RSS (recommended, Linux/macOS):
+SOLUTION: Use the JSON harness or external profiling tools
+
+1. MEASURE PEAK RSS:
    ─────────────────────────────────────────────
 
-   Using /usr/bin/time:
+   Instrumented child maxRSS in KiB (JSON rss field):
+     pnpm --silent benchmark esm-ts --modules 1000 --runs 5 --json > results.json
+
+   Using GNU /usr/bin/time on Linux:
      /usr/bin/time -v node dist/cli.js fixture.ts 2>&1 | grep "Maximum resident"
      /usr/bin/time -v tsx fixture.ts 2>&1 | grep "Maximum resident"
 
-   Using bash built-in time:
-     export TIMEFORMAT='RSS: %Mmb'
-     time node dist/cli.js fixture.ts
+   On macOS use /usr/bin/time -l (different output and units).
+   Bash built-in time / TIMEFORMAT has no %M peak-memory field.
 
 2. NODE PROFILING (detailed heap analysis):
    ─────────────────────────────────────────
 
-   Generate isolate snapshot for analysis:
+   Generate a heap profile:
+     node --heap-prof dist/cli.js fixture.ts
+
+   CPU profiling (not a heap snapshot):
      node --prof dist/cli.js fixture.ts
      node --prof-process isolate-*.log > profile.txt
      cat profile.txt
@@ -48,11 +50,12 @@ SOLUTION: Use external profiling tools instead
      node --inspect-brk dist/cli.js fixture.ts
      # Open chrome://inspect in Chrome
 
-3. MEMORY TIMELINE (Node 24.11.1+):
+3. MEMORY SAMPLING (Node 24.11.1+):
    ──────────────────────────
 
-   Using --expose-gc with tracking:
+   If your fixture explicitly samples process.memoryUsage():
      node --expose-gc dist/cli.js fixture.ts
+   --expose-gc only exposes globalThis.gc(); it does not record a timeline.
 
 4. QUICK COMPARISON:
    ──────────────────
@@ -65,13 +68,12 @@ SOLUTION: Use external profiling tools instead
 WHY THIS HAPPENS:
   • Each runner spawns in isolated process
   • Mitata measures parent process during spawn
-  • Parent doesn't allocate memory between iterations
-  • Result: identical memory across all runners
+  • Parent allocations do not report the child's peak RSS
 
 NEXT STEPS:
   1. Run 'pnpm benchmark:compare' for timing measurements (these work correctly)
-  2. Use /usr/bin/time -v for accurate memory measurements
-  3. Compare peak RSS values from external tool output
+  2. Use JSON child maxRSS or Linux /usr/bin/time -v for peak RSS
+  3. Compare with the same Node version, workload, maps, and cache state
 
 More info: tests/benchmarks/compare.ts
 `);
