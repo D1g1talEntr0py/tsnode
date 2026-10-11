@@ -75,15 +75,17 @@ await build({
 	splitting: true,
 	// Only runtime dependencies stay external; everything else (including devDependencies imported by runtime code) must be bundled
 	external: [ 'esbuild', '@d1g1tal/watchr' ],
+	// Prefer ESM entries; jsonc-parser's UMD `main` uses a dynamic require that breaks in ESM bundles
+	mainFields: [ 'module', 'main' ],
 	minify: true,
 	logLevel: 'info'
 });
 
 const cliOutputPath = join(projectRoot, 'dist', 'cli.js');
-const cliOutput = await readFile(cliOutputPath, 'utf8');
+const cliOutput = await readFile(cliOutputPath, 'utf-8');
 
 if (!cliOutput.startsWith('#!/usr/bin/env node\n')) {
-	await writeFile(cliOutputPath, `#!/usr/bin/env node\n${cliOutput}`, 'utf8');
+	await writeFile(cliOutputPath, `#!/usr/bin/env node\n${cliOutput}`, 'utf-8');
 }
 
 await chmod(cliOutputPath, 0o755);
