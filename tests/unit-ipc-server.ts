@@ -1,9 +1,11 @@
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir as osTmpdir } from 'node:os';
 import { afterEach, describe, expect, test } from 'vitest';
-import { createIpcServer } from '../src/utils/ipc/server';
-import { tmpdir } from '../src/utils/temporary-directory';
+import { closeIpcServer, createIpcServer } from '../src/utils/ipc/server';
+import { assertPrivateDirectory, ensurePrivateDirectory, tmpdir } from '../src/utils/temporary-directory';
 
 const pipePathForTest = () => {
 	const pipeName = `ipc-${randomUUID()}.pipe`;
@@ -58,6 +60,42 @@ describe('IPC server', () => {
 		if (server) {
 			await new Promise<void>((resolve) => server!.close(() => resolve()));
 			server = undefined;
+		}
+	});
+
+	test('normal close restores exit listener baseline and closes idle connections', async () => {
+		const baseline = process.listenerCount('exit');
+		for (let iteration = 0; iteration < 3; iteration += 1) {
+			const pipePath = pipePathForTest();
+			server = await createIpcServer(pipePath);
+			const socket = await connect(pipePath);
+			const closed = new Promise<void>(resolve => socket.once('close', resolve));
+			await new Promise<void>(resolve => server!.close(() => resolve()));
+			await Promise.all([ closeIpcServer(server), closeIpcServer(server) ]);
+			await closed;
+			expect(socket.destroyed).toBe(true);
+			expect(process.listenerCount('exit')).toBe(baseline);
+			if (process.platform !== 'win32') { expect(existsSync(pipePath)).toBe(false); }
+			server = undefined;
+		}
+	});
+
+	test('rejects a temporary directory owned by another user', () => {
+		const directoryStats = { isDirectory: () => true, isSymbolicLink: () => false, uid: 1001 };
+		expect(() => assertPrivateDirectory('/tmp/tsnode-owner', directoryStats, 1000)).toThrow('Unsafe temporary directory');
+	});
+
+	test.skipIf(process.platform === 'win32')('secures owned directories and rejects symlinks', () => {
+		const root = mkdtempSync(path.join(osTmpdir(), 'tsnode-private-'));
+		try {
+			chmodSync(root, 0o777);
+			ensurePrivateDirectory(root);
+			expect(lstatSync(root).mode & 0o777).toBe(0o700);
+			const link = path.join(root, 'link');
+			symlinkSync(root, link);
+			expect(() => ensurePrivateDirectory(link)).toThrow('Unsafe temporary directory');
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 

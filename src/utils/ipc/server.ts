@@ -1,6 +1,6 @@
-import { createServer } from 'node:net';
-import { mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from '../temporary-directory';
+import { createServer, type Server, type Socket } from 'node:net';
+import { rmSync } from 'node:fs';
+import { ensurePrivateDirectory } from '../temporary-directory';
 import { isWindows, getPipePath } from './get-pipe-path';
 
 type OnMessage = (message: Buffer) => void;
@@ -94,8 +94,19 @@ const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
 	};
 };
 
+const serverClosers = new WeakMap<Server, () => Promise<void>>();
+
+export const closeIpcServer = (server: Server): Promise<void> => serverClosers.get(server)?.() ?? new Promise<void>((resolve) => server.close(() => resolve()));
+
 export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
+	const sockets = new Set<Socket>();
+	let closing: Promise<void> | undefined;
 	const server = createServer((socket) => {
+		if (closing) { socket.destroy(); return }
+		sockets.add(socket);
+		socket.unref();
+		socket.once('close', () => sockets.delete(socket));
+		socket.on('error', () => socket.destroy());
 		socket.on('data', bufferData((message: Buffer) => {
 			try {
 				const parsedMessage: unknown = JSON.parse(message.toString());
@@ -106,7 +117,7 @@ export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 
 	// Sync: the child cannot be spawned until the socket is listening, so each
 	// async fs round trip here is pure added latency on the CLI critical path.
-	mkdirSync(tmpdir, { recursive: true });
+	ensurePrivateDirectory();
 
 	/**
 	 * Fix #457 (https://github.com/privatenumber/tsx/issues/457)
@@ -121,15 +132,18 @@ export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 	rmSync(pipePath, { force: true });
 
 	await new Promise<void>((resolve, reject) => {
-		server.listen(pipePath, resolve);
-		server.on('error', reject);
+		server.once('error', reject);
+		server.listen(pipePath, () => {
+			server.removeListener('error', reject);
+			resolve();
+		});
 	});
 
 	// Prevent Node from waiting for this socket to close before exiting
 	server.unref();
 
-	process.on('exit', () => {
-		server.close();
+	const onExit = () => {
+		for (const socket of sockets) { socket.destroy() }
 
 		/**
 		 * Only clean on Unix
@@ -146,7 +160,24 @@ export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 		if (!isWindows) {
 			try { rmSync(pipePath) } catch { /* ignore */ }
 		}
-	});
+	};
+	process.on('exit', onExit);
+
+	const originalClose = server.close.bind(server);
+	const close = () => {
+		if (!closing) {
+			process.removeListener('exit', onExit);
+			for (const socket of sockets) { socket.destroy() }
+			closing = new Promise<void>((resolve) => originalClose(() => resolve()));
+		}
+
+		return closing;
+	};
+	serverClosers.set(server, close);
+	server.close = (callback) => {
+		void close().then(() => callback?.());
+		return server;
+	};
 
 	return server;
 };
