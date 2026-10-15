@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.4.0...v1.5.0) - 2026-10-15
+
+
+
+### Features
+* **core:** modernize runtime and watch behavior ([120da54](https://github.com/D1g1talEntr0py/tsnode/commit/120da54d14b53152fb8badd5e336da0ac48604e8))
+
+
+
+
+
+
+
+### Chores
+* **repo:** update CI and documentation ignore policy ([523c848](https://github.com/D1g1talEntr0py/tsnode/commit/523c8485de5029cbcb37c1b0eee15293f4e615fc))
+
+
+
+
+
+
+
 ## [1.4.0](https://github.com/D1g1talEntr0py/tsnode/compare/v1.3.5...v1.4.0) - 2026-10-11
 
 
@@ -56,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Chores
 * **validation:** type-check tests and build scripts ([a61ef43](https://github.com/D1g1talEntr0py/tsnode/commit/a61ef436e56001bb4e5b1bad39114a30745f4409))
+
+### Chores
+* **release:** 1.4.0 [skip ci] ([8b8e82f](https://github.com/D1g1talEntr0py/tsnode/commit/8b8e82f34bec879246a63fe3218b18990d2d18a6))
 
 
 
