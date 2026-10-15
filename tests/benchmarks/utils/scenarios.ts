@@ -1,4 +1,4 @@
-import type { FileTree } from 'fs-fixture';
+import type { FileTree } from '../../utils/fixture';
 import {
 	createTsconfigForTree,
 	esmTree,
@@ -9,6 +9,7 @@ import {
 	metricsReporter,
 	type SpecifierStyle,
 } from './generate-fixture';
+import { Json } from '../../../src/utils/json';
 
 export type Scenario = {
 	name: string;
@@ -60,7 +61,7 @@ export const scenarios: Scenario[] = [
 		description: 'tsnode on a TypeScript ESM tree — transform + resolution hot path (--specifier applies)',
 		build: (moduleCount, specifierStyle) => ({
 			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...esmTree(moduleCount, specifierStyle),
 		}),
 		entry: 'main.ts',
@@ -72,7 +73,7 @@ export const scenarios: Scenario[] = [
 		description: 'TypeScript ESM tree with enums in every module — forces non-erasable syntax fallback',
 		build: (moduleCount, specifierStyle) => ({
 			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...nonErasableTsTree(moduleCount, specifierStyle, 'enum'),
 		}),
 		entry: 'main.ts',
@@ -84,7 +85,7 @@ export const scenarios: Scenario[] = [
 		description: 'TypeScript ESM tree with namespaces in every module — forces non-erasable syntax fallback',
 		build: (moduleCount, specifierStyle) => ({
 			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...nonErasableTsTree(moduleCount, specifierStyle, 'namespace'),
 		}),
 		entry: 'main.ts',
@@ -96,7 +97,7 @@ export const scenarios: Scenario[] = [
 		description: 'TypeScript ESM tree with decorators in every module — bypasses native stripping and measures decorator fallback cost',
 		build: (moduleCount, specifierStyle) => ({
 			...createTsconfigForTree({ experimentalDecorators: true }),
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...nonErasableTsTree(moduleCount, specifierStyle, 'decorator'),
 		}),
 		entry: 'main.ts',
@@ -108,7 +109,7 @@ export const scenarios: Scenario[] = [
 		description: 'Mostly erasable TypeScript tree with sparse decorators (every 25th module) — approximates framework-style fallback islands',
 		build: (moduleCount, specifierStyle) => ({
 			...createTsconfigForTree({ experimentalDecorators: true }),
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...mixedTsTree(moduleCount, specifierStyle, { syntax: 'decorator', fallbackEvery: 25 }),
 		}),
 		entry: 'main.ts',
@@ -120,7 +121,7 @@ export const scenarios: Scenario[] = [
 		description: "Node's native type stripping on the TS tree — reference floor (ignores --compare)",
 		build: moduleCount => ({
 			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...esmTree(moduleCount, 'ts'),
 		}),
 		entry: 'main.ts',
@@ -132,7 +133,7 @@ export const scenarios: Scenario[] = [
 		description: 'tsnode CLI test runner mode — isolates fork-required `--test` startup overhead',
 		build: () => ({
 			...tsconfigForTree,
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			'main.test.ts': `import assert from 'node:assert/strict';\nimport test from 'node:test';\n\ntest('startup', () => {\n\tassert.equal(1, 1);\n});\n\n${metricsReporter}\n`,
 		}),
 		entry: 'main.test.ts',

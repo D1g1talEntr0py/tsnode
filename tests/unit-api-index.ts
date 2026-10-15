@@ -115,13 +115,14 @@ test('bounds the reuse lookup without tearing down evicted successful scopes', a
 	const firstOptions = { parentURL: import.meta.url, tsconfig: false as const, onImport: () => undefined };
 	try {
 		await tsImport('./entry.ts', firstOptions);
-		const otherOptions = Array.from({ length: 64 }, () => ({ ...firstOptions, onImport: () => undefined }));
-		for (let index = 0; index < 64; index += 1) {
+		const otherOptions = Array.from({ length: 128 }, () => ({ ...firstOptions, onImport: () => undefined }));
+		for (let index = 0; index < otherOptions.length; index += 1) {
 			await tsImport('./entry.ts', otherOptions[index]!);
 		}
 		await tsImport('./entry.ts', firstOptions);
 		for (const options of otherOptions) { await tsImport('./entry.ts', options); }
-		expect(register).toHaveBeenCalledTimes(65);
+		for (const options of otherOptions.toReversed()) { await tsImport('./entry.ts', options); }
+		expect(register).toHaveBeenCalledTimes(129);
 		expect(handles.every(handle => handle.unregister.mock.calls.length === 0)).toBe(true);
 	} finally { register.mockRestore(); }
 });

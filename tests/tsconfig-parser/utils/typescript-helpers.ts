@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import type { TypeScriptConfig, TypeScriptVersion } from '../../../src/utils/tsconfig-parser';
+import { Json } from '../../../src/utils/json';
 
 export const typescriptVersions = [6, 7] as const satisfies readonly TypeScriptVersion[];
 
@@ -29,7 +30,7 @@ export const getTscTsconfig = async (cwd: string, tsconfigPath?: string, version
 		cwd
 	);
 
-	return JSON.parse(tscProcess.stdout) as TypeScriptConfig;
+	return Json.parse(tscProcess.stdout) as TypeScriptConfig;
 };
 
 const resolveAttemptPattern = /^(File|Directory) '(.+)'/gm;

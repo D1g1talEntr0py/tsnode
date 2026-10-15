@@ -2,8 +2,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
-import { createFixture } from 'fs-fixture';
-import { childEnvironment } from './utils/fixture';
+import { childEnvironment, createFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
@@ -11,7 +11,7 @@ const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve
 const executionEnvironments: Record<string, string>[] = [{}, { TSNODE_DISABLE_IN_PROCESS: '1' }];
 
 const tsconfigForFixture = {
-	'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'esnext', module: 'esnext' } }),
+	'tsconfig.json': Json.serialize({ compilerOptions: { target: 'esnext', module: 'esnext' } })!,
 };
 
 type SpawnResult = {
@@ -81,7 +81,7 @@ describe('cli integration', () => {
 		'Object.assign(Object.create(null), { answer: 42 })',
 		'import("node:path").then(({ sep }) => console.log(sep))',
 	])('matches native print completion and imports: %s', async (code) => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 		const native = await collect(spawn(process.execPath, ['-p', code], { cwd: fixture.path, env: childEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] })).exited;
 		for (const env of executionEnvironments) {
 			const result = await runCli(['-p', code], fixture.path, env).exited;
@@ -97,7 +97,7 @@ describe('cli integration', () => {
 		'console.log(import /* split */ . meta /* split */ . main)',
 		'console.log(import.meta["main"])',
 	])('preserves entry and eval main semantics: %s', async (code) => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }), 'main.ts': code });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })!, 'main.ts': code });
 		for (const args of [['main.ts'], ['-e', code]]) {
 			for (const env of executionEnvironments) {
 				const result = await runCli(args, fixture.path, env).exited;
@@ -114,19 +114,19 @@ describe('cli integration', () => {
 		{ flags: ['--'] },
 	])('normalizes file URLs behind leading flags $flags', async ({ flags }) => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			'main.ts': 'console.log(JSON.stringify(process.argv.slice(1)))',
 		});
 		const entryPath = path.join(fixture.path, 'main.ts');
 		for (const env of executionEnvironments) {
 			const result = await runCli(['--no-cache', ...flags, pathToFileURL(entryPath).href, '--no-cache', '--', 'arg'], fixture.path, env).exited;
 			expect(result.exitCode, result.stderr).toBe(0);
-			expect(JSON.parse(result.stdout)).toEqual([entryPath, '--no-cache', '--', 'arg']);
+			expect(Json.parse(result.stdout)).toEqual([entryPath, '--no-cache', '--', 'arg']);
 		}
 	});
 
 	test('removes runner flags after separated Node option values in eval', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 		for (const env of executionEnvironments) {
 			const result = await runCli(['--conditions', 'development', '--no-cache', '-e', 'console.log(42)'], fixture.path, env).exited;
 			expect(result.exitCode, result.stderr).toBe(0);
@@ -136,13 +136,13 @@ describe('cli integration', () => {
 
 	test('applies eval config before loading enum imports and inherits hooks in Workers', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
-			'custom.json': JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@value': ['./value.ts'] } } }),
+			'package.json': Json.serialize({ type: 'module' })!,
+			'custom.json': Json.serialize({ compilerOptions: { baseUrl: '.', paths: { '@value': ['./value.ts'] } } })!,
 			'value.ts': 'export enum Value { Answer = 42 }',
 			'worker.ts': 'enum Value { Answer = 42 }; console.log(Value.Answer)',
 			'child.ts': 'enum Value { Answer = 42 }; console.log(Value.Answer)',
 		});
-		const code = `import { Value } from "@value"; import { Worker } from "node:worker_threads"; import { fork } from "node:child_process"; console.log(Value.Answer, process.env.TSNODE_DISABLE_CACHE); new Worker(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)})); fork(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'child.ts')).href)}))`;
+		const code = `import { Value } from "@value"; import { Worker } from "node:worker_threads"; import { fork } from "node:child_process"; console.log(Value.Answer, process.env.TSNODE_DISABLE_CACHE); new Worker(new URL(${Json.serialize(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)})); fork(new URL(${Json.serialize(pathToFileURL(path.join(fixture.path, 'child.ts')).href)}))`;
 		for (const env of executionEnvironments) {
 			const result = await runCli(['--no-cache', '--tsconfig', 'custom.json', '-e', code], fixture.path, env).exited;
 			expect(result.exitCode, result.stderr).toBe(0);
@@ -152,7 +152,7 @@ describe('cli integration', () => {
 
 	test('retains parent heap flags with native default Worker inheritance', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			'main.ts': 'import { Worker } from "node:worker_threads"; new Worker(new URL("./worker.ts", import.meta.url))',
 			'worker.ts': 'import { getHeapStatistics } from "node:v8"; enum Value { Answer = 42 }; console.log(JSON.stringify({ heap: getHeapStatistics().heap_size_limit, answer: Value.Answer }))',
 		});
@@ -162,7 +162,7 @@ describe('cli integration', () => {
 			cwd: fixture.path, env: childEnvironment({ NODE_OPTIONS: nodeOptions }), stdio: ['ignore', 'pipe', 'pipe'],
 		})).exited;
 		expect(native.exitCode, native.stderr).toBe(0);
-		const evalCode = `import { Worker } from "node:worker_threads"; new Worker(new URL(${JSON.stringify(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)}))`;
+		const evalCode = `import { Worker } from "node:worker_threads"; new Worker(new URL(${Json.serialize(pathToFileURL(path.join(fixture.path, 'worker.ts')).href)}))`;
 		for (const args of [['main.ts'], ['-e', evalCode]]) {
 			for (const env of executionEnvironments) {
 				const result = await runCli(args, fixture.path, env, flags).exited;
@@ -174,20 +174,20 @@ describe('cli integration', () => {
 
 	test.each([{ execArgv: [] }, { execArgv: ['--no-warnings'] }])('preserves explicit Worker execArgv $execArgv', async ({ execArgv }) => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
-			'main.ts': `import { Worker } from "node:worker_threads"; new Worker(new URL("./worker.js", import.meta.url), { execArgv: ${JSON.stringify(execArgv)} })`,
+			'package.json': Json.serialize({ type: 'module' })!,
+			'main.ts': `import { Worker } from "node:worker_threads"; new Worker(new URL("./worker.js", import.meta.url), { execArgv: ${Json.serialize(execArgv)} })`,
 			'worker.js': 'console.log(JSON.stringify(process.execArgv))',
 		});
 		for (const env of executionEnvironments) {
 			const result = await runCli(['main.ts'], fixture.path, env).exited;
 			expect(result.exitCode, result.stderr).toBe(0);
-			expect(JSON.parse(result.stdout)).toEqual(execArgv);
+			expect(Json.parse(result.stdout)).toEqual(execArgv);
 		}
 	});
 
 	test('runs a TypeScript entry and exits cleanly', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'const message: string = "hello"; console.log(message);\n',
 		});
@@ -201,7 +201,7 @@ describe('cli integration', () => {
 	});
 
 	test('reports its own version alongside the node version', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['--version'], fixture.path);
 		const result = await exited;
@@ -215,7 +215,7 @@ describe('cli integration', () => {
 
 	test('propagates a non-zero exit code from the entry', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'const code: number = 3; process.exit(code);\n',
 		});
@@ -227,7 +227,7 @@ describe('cli integration', () => {
 
 	test('forwards arguments to the entry without leaking tsnode flags', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify(process.argv.slice(2)));\n',
 		});
@@ -235,11 +235,11 @@ describe('cli integration', () => {
 		const { exited } = runCli(['main.ts', '--flag', 'value'], fixture.path);
 		const result = await exited;
 
-		expect(JSON.parse(result.stdout.trim())).toEqual(['--flag', 'value']);
+		expect(Json.parse(result.stdout.trim())).toEqual(['--flag', 'value']);
 	});
 
 	test('executes TypeScript eval input', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['-e', 'const value: number = 41; console.log(value + 1)'], fixture.path);
 		const result = await exited;
@@ -250,7 +250,7 @@ describe('cli integration', () => {
 	});
 
 	test.each([ '--eval', '--print', '--input-type', '--tsconfig' ])('rejects a missing string value for %s', async (option) => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli([option], fixture.path);
 		const result = await exited;
@@ -260,7 +260,7 @@ describe('cli integration', () => {
 	});
 
 	test('uses the last repeated eval value', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['-e', 'console.log("first")', '--eval', 'console.log("second")'], fixture.path);
 		const result = await exited;
@@ -270,18 +270,18 @@ describe('cli integration', () => {
 	});
 
 	test('supports top-level await and argv forwarding in eval mode', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['-e', 'await Promise.resolve(console.log(JSON.stringify(process.argv.slice(1))))', 'one', 'two'], fixture.path);
 		const result = await exited;
 
 		expect(result.stderr).toBe('');
-		expect(JSON.parse(result.stdout.trim())).toEqual(['one', 'two']);
+		expect(Json.parse(result.stdout.trim())).toEqual(['one', 'two']);
 		expect(result.exitCode).toBe(0);
 	});
 
 	test('runs eval input in-process', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['-e', 'console.log(process.ppid)'], fixture.path);
 		const result = await exited;
@@ -292,7 +292,7 @@ describe('cli integration', () => {
 
 	test('resolves relative TypeScript imports from eval mode', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'value.ts': 'const value: number = 42; export default value;\n',
 		});
@@ -306,7 +306,7 @@ describe('cli integration', () => {
 	});
 
 	test('prints transformed TypeScript expressions', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['-p', '(1 as number) + 2'], fixture.path);
 		const result = await exited;
@@ -318,7 +318,7 @@ describe('cli integration', () => {
 
 	test('runs a .js entry through its TypeScript source', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'const value: number = 42; console.log(value);\n',
 		});
@@ -332,7 +332,7 @@ describe('cli integration', () => {
 	});
 
 	test('prints help without trying to run an entry', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const { exited } = runCli(['--help'], fixture.path);
 		const result = await exited;
@@ -344,7 +344,7 @@ describe('cli integration', () => {
 
 	test('reports an unknown option while preserving the entry error', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log("ran");\n',
 		});
@@ -359,7 +359,7 @@ describe('cli integration', () => {
 
 	test('relays SIGINT to the child and reports exit code 130', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'const label: string = "ready"; console.log(label); setInterval(() => {}, 1000);\n',
 		});
@@ -385,7 +385,7 @@ describe('cli integration', () => {
 		{ name: 'removed handlers', setup: 'process.removeAllListeners("SIGTERM"); console.log(process.listenerCount("SIGTERM"))', expected: 143 },
 	])('relays SIGTERM with $name', async ({ name, setup, expected }) => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			'main.ts': `
 				const deadline = Date.now() + 5000;
 				while (process.rawListeners('SIGTERM').length === 0) {
@@ -406,7 +406,7 @@ describe('cli integration', () => {
 
 	test('gives the child the env it needs to connect for signal relay', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify({ ipc: process.env.TSNODE_IPC ?? null, deps: process.env.TSNODE_DEPENDENCY_REPORTING ?? null }));\n',
 		});
@@ -420,12 +420,12 @@ describe('cli integration', () => {
 		// The regression: without TSNODE_IPC the child never opened the socket,
 		// so preflight bound no handlers and the relay was inert.
 		// Dependency reporting must stay off — that is watch mode only.
-		expect(JSON.parse((await exited).stdout.trim())).toEqual({ ipc: '1', deps: null });
+		expect(Json.parse((await exited).stdout.trim())).toEqual({ ipc: '1', deps: null });
 	});
 
 	test('leaves relay env unset when the relay is disabled', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify({ ipc: process.env.TSNODE_IPC ?? null }));\n',
 		});
@@ -435,7 +435,7 @@ describe('cli integration', () => {
 			TSNODE_DISABLE_SIGNAL_RELAY: '1',
 		});
 
-		expect(JSON.parse((await exited).stdout.trim())).toEqual({ ipc: null });
+		expect(Json.parse((await exited).stdout.trim())).toEqual({ ipc: null });
 	});
 
 	/**
@@ -443,7 +443,7 @@ describe('cli integration', () => {
 	 * process; forked, it is the intermediate CLI process.
 	 */
 	const parentPidFixture = {
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForFixture,
 		'main.ts': 'const ppid: number = process.ppid; console.log(ppid);\n',
 	};
@@ -472,7 +472,7 @@ describe('cli integration', () => {
 
 	test('runs an extensionless entry in-process and preserves argv[1]', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify({ ppid: process.ppid, argv1: process.argv[1] }));\n',
 		});
@@ -480,7 +480,7 @@ describe('cli integration', () => {
 		const entry = path.join(fixture.path, 'main');
 		const { exited } = runCli([entry], fixture.path);
 		const result = await exited;
-		const parsed = JSON.parse(result.stdout.trim()) as { ppid: number; argv1: string };
+		const parsed = Json.parse(result.stdout.trim()) as { ppid: number; argv1: string };
 
 		expect(parsed.ppid).toBe(process.pid);
 		expect(parsed.argv1).toBe(entry);
@@ -489,7 +489,7 @@ describe('cli integration', () => {
 
 	test('runs a directory entry in-process and preserves argv[1]', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'app/index.ts': 'console.log(JSON.stringify({ ppid: process.ppid, argv1: process.argv[1] }));\n',
 		});
@@ -497,7 +497,7 @@ describe('cli integration', () => {
 		const entry = path.join(fixture.path, 'app');
 		const { exited } = runCli([entry], fixture.path);
 		const result = await exited;
-		const parsed = JSON.parse(result.stdout.trim()) as { ppid: number; argv1: string };
+		const parsed = Json.parse(result.stdout.trim()) as { ppid: number; argv1: string };
 
 		expect(parsed.ppid).toBe(process.pid);
 		expect(parsed.argv1).toBe(entry);
@@ -516,7 +516,7 @@ describe('cli integration', () => {
 
 	test('normalizes a file URL entry before forking', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify({ ppid: process.ppid, argv1: process.argv[1] }));\n',
 		});
@@ -525,7 +525,7 @@ describe('cli integration', () => {
 
 		const { exited } = runCli([entryUrl], fixture.path, { TSNODE_DISABLE_IN_PROCESS: '1' });
 		const result = await exited;
-		const parsed = JSON.parse(result.stdout.trim()) as { ppid: number; argv1: string };
+		const parsed = Json.parse(result.stdout.trim()) as { ppid: number; argv1: string };
 
 		expect(parsed.ppid).not.toBe(process.pid);
 		expect(parsed.argv1).toBe(entryPath);
@@ -576,7 +576,7 @@ describe('cli integration', () => {
 
 	test('--enable-source-maps produces the same source-mapped stack trace in-process as forked', async () => {
 		const stackTraceFixture = {
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			// The enum forces the esbuild fallback transform, which reflows line numbers,
 			// so a correct stack trace line here can only come from real source-map remapping.
@@ -606,11 +606,11 @@ describe('cli integration', () => {
 		const [ inProcessPpidLine, inProcessFrameLine ] = inProcess.stdout.trim().split('\n');
 		const [ forkedPpidLine, forkedFrameLine ] = forked.stdout.trim().split('\n');
 
-		expect(Number((JSON.parse(inProcessPpidLine!) as { ppid: number }).ppid)).toBe(process.pid);
-		expect(Number((JSON.parse(forkedPpidLine!) as { ppid: number }).ppid)).not.toBe(process.pid);
+		expect(Number((Json.parse(inProcessPpidLine!) as { ppid: number }).ppid)).toBe(process.pid);
+		expect(Number((Json.parse(forkedPpidLine!) as { ppid: number }).ppid)).not.toBe(process.pid);
 
-		const inProcessFrame = (JSON.parse(inProcessFrameLine!) as { frame: string }).frame;
-		const forkedFrame = (JSON.parse(forkedFrameLine!) as { frame: string }).frame;
+		const inProcessFrame = (Json.parse(inProcessFrameLine!) as { frame: string }).frame;
+		const forkedFrame = (Json.parse(forkedFrameLine!) as { frame: string }).frame;
 
 		expect(inProcessFrame).toContain('main.ts:4:');
 		expect(forkedFrame).toContain('main.ts:4:');
@@ -621,7 +621,7 @@ describe('cli integration', () => {
 
 	test('forks an entry that reads import.meta.main so it is true, matching --import/forked behavior', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log(JSON.stringify({ ppid: process.ppid, main: import.meta.main })); if (import.meta.main) { console.log("MAIN_RAN") }\n',
 		});
@@ -629,7 +629,7 @@ describe('cli integration', () => {
 		const { exited } = runCli(['main.ts'], fixture.path);
 		const result = await exited;
 		const [ firstLine ] = result.stdout.trim().split('\n');
-		const parsed = JSON.parse(firstLine!) as { ppid: number; main: boolean };
+		const parsed = Json.parse(firstLine!) as { ppid: number; main: boolean };
 
 		// The in-process fast path can never make a dynamically imported module
 		// report import.meta.main === true, so this entry must be forked.
@@ -641,7 +641,7 @@ describe('cli integration', () => {
 
 	test('runs in-process when only a dependency (not the entry) reads import.meta.main', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'import "./dep.ts";\nconsole.log(process.ppid);\n',
 			'dep.ts': 'console.log(JSON.stringify({ main: import.meta.main }));\n',
@@ -652,14 +652,14 @@ describe('cli integration', () => {
 		const [ depLine, ppidLine ] = result.stdout.trim().split('\n');
 
 		// A dependency module is never the process entry, in-process or forked.
-		expect(JSON.parse(depLine!)).toEqual({ main: false });
+		expect(Json.parse(depLine!)).toEqual({ main: false });
 		expect(Number(ppidLine)).toBe(process.pid);
 		expect(result.exitCode).toBe(0);
 	});
 
 	test('an in-process entry can spawn a default Worker that still gets tsnode hooks', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'import { Worker } from "node:worker_threads";\nconst worker = new Worker(new URL("./worker.ts", import.meta.url));\nworker.on("error", (error) => { console.error(error); process.exitCode = 1 });\n',
 			// `enum` is non-erasable TS syntax; requires tsnode's esbuild fallback, not Node's native strip.
@@ -670,13 +670,13 @@ describe('cli integration', () => {
 		const result = await exited;
 
 		expect(result.stderr).toBe('');
-		expect(JSON.parse(result.stdout.trim())).toEqual({ ppid: process.pid, color: 0 });
+		expect(Json.parse(result.stdout.trim())).toEqual({ ppid: process.pid, color: 0 });
 		expect(result.exitCode).toBe(0);
 	});
 
 	test('an in-process entry can fork() a default child that still gets tsnode hooks', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'import { fork } from "node:child_process";\nconst child = fork(new URL("./child.ts", import.meta.url));\nchild.on("exit", (code) => process.exit(code ?? 1));\n',
 			// `enum` is non-erasable TS syntax; requires tsnode's esbuild fallback, not Node's native strip.
@@ -687,13 +687,13 @@ describe('cli integration', () => {
 		const result = await exited;
 
 		expect(result.stderr).toBe('');
-		expect(JSON.parse(result.stdout.trim())).toEqual({ color: 0 });
+		expect(Json.parse(result.stdout.trim())).toEqual({ color: 0 });
 		expect(result.exitCode).toBe(0);
 	});
 
 	test('reports a failing entry with a non-zero exit code in-process', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'const reason: string = "boom"; throw new Error(reason);\n',
 		});

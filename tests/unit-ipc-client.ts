@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createIpcServer } from '../src/utils/ipc/server';
 import { getPipePath } from '../src/utils/ipc/get-pipe-path';
 import { createIpcSender, ipcQueueLimits } from '../src/utils/ipc/client';
+import { Json } from '../src/utils/json';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
@@ -45,12 +46,19 @@ describe('IPC client', () => {
 		}
 	});
 
+	test('rejects messages whose toJSON returns undefined without queueing them', () => {
+		const sender = createIpcSender();
+
+		expect(() => sender.send({ type: 'signal', signal: 'SIGINT', toJSON: () => undefined })).toThrow('IPC message must serialize to JSON');
+		expect(sender.stats().queuedMessages).toBe(0);
+	});
+
 	test('bounds queued traffic, coalesces dependencies, and prioritizes signals after drain', () => {
 		const sender = createIpcSender();
 		const socket = new EventEmitter() as net.Socket;
 		const written: unknown[] = [];
 		socket.write = vi.fn((buffer: Buffer) => {
-			written.push(JSON.parse(buffer.subarray(4).toString()));
+			written.push(Json.parse(buffer.subarray(4).toString()));
 			return false;
 		}) as typeof socket.write;
 		socket.destroy = vi.fn(() => socket);
@@ -128,7 +136,7 @@ describe('IPC client', () => {
 		server = await createIpcServer(getPipePath(process.pid));
 		server.on('connection', socket => socket.once('data', () => socket.destroy()));
 		const childProcess = runClient(`
-			const { parent, connectingToServer } = await import(${JSON.stringify(clientPath)});
+			const { parent, connectingToServer } = await import(${Json.serialize(clientPath)});
 			const captured = await connectingToServer;
 			captured({ type: 'signal', signal: 'SIGINT' });
 			const deadline = setTimeout(() => process.exit(1), 2000);
@@ -152,7 +160,7 @@ describe('IPC client', () => {
 		const messages: Array<Record<string, unknown>> = [];
 		server.on('data', message => messages.push(message));
 		const childProcess = runClient(`
-			const { parent, connectingToServer } = await import(${JSON.stringify(clientPath)});
+			const { parent, connectingToServer } = await import(${Json.serialize(clientPath)});
 			for (let index = 0; index < 1100; index += 1) parent.send({ type: 'dependency', path: '/startup-' + index + '.ts' });
 			parent.send({ type: 'signal', signal: 'SIGTERM' });
 			await connectingToServer;
@@ -218,7 +226,7 @@ describe('IPC client', () => {
 		server.on('data', (message) => messages.push(message));
 
 		const childProcess = runClient(`
-			const { parent, connectingToServer } = await import(${JSON.stringify(clientPath)});
+			const { parent, connectingToServer } = await import(${Json.serialize(clientPath)});
 			parent.send?.({ type: 'dependency', path: '/real/child.ts' });
 			await connectingToServer;
 		`, { TSNODE_IPC: '1', TSNODE_DEPENDENCY_REPORTING: '1' });
@@ -231,7 +239,7 @@ describe('IPC client', () => {
 
 	test('resolves without a sender when the IPC pipe is missing', async () => {
 		const childProcess = runClient(`
-			const { parent, connectingToServer } = await import(${JSON.stringify(clientPath)});
+			const { parent, connectingToServer } = await import(${Json.serialize(clientPath)});
 			await connectingToServer;
 			console.log(parent.send === undefined ? 'disconnected' : 'connected');
 		`, { TSNODE_IPC: '1', TSNODE_DEPENDENCY_REPORTING: '1' });
@@ -248,7 +256,7 @@ describe('IPC client', () => {
 		const connectionClosed = new Promise<void>((resolve) => server!.once('connection', socket => socket.once('close', () => resolve())));
 
 		const childProcess = runClient(`
-			const { connectingToServer } = await import(${JSON.stringify(clientPath)});
+			const { connectingToServer } = await import(${Json.serialize(clientPath)});
 			await connectingToServer;
 		`, { TSNODE_IPC: '1' });
 		const child = collect(childProcess);

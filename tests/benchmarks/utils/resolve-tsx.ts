@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
+import { Json } from '../../../src/utils/json';
 
 export type ComparisonImplementation = {
 	name: string;
@@ -49,7 +50,7 @@ const readPackageBinPath = async (
 	binName: string,
 ): Promise<string> => {
 	const packageJsonPath = path.join(packageRoot, 'package.json');
-	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
+	const packageJson = Json.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
 		bin?: string | Record<string, string>;
 	};
 
@@ -73,7 +74,7 @@ const readPackageBinPath = async (
 
 const readPackageVersion = async (packageRoot: string): Promise<string | undefined> => {
 	const packageJsonPath = path.join(packageRoot, 'package.json');
-	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
+	const packageJson = Json.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
 		version?: string;
 	};
 
@@ -170,10 +171,10 @@ export const resolveComparison = async (
 	await fs.mkdir(installDirectory, { recursive: true });
 	await fs.writeFile(
 		path.join(installDirectory, 'package.json'),
-		JSON.stringify({
+		Json.serialize({
 			name: 'comparison-benchmark',
 			private: true,
-		}),
+		})!,
 	);
 
 	process.stderr.write(`Installing ${target.installSpecifier}...\n`);

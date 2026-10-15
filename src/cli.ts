@@ -7,13 +7,22 @@ import type { Flags } from './types';
 import type { ParseArgsOptionsConfig } from 'node:util';
 import type { ChildProcess, Serializable } from 'node:child_process';
 
+type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {
+	[Name in keyof Options]?: Options[Name] extends { type: 'string' } ? string : Options[Name] extends { type: 'boolean' } ? boolean : never;
+};
+
+type ParsedCliValues = CliValuesFromParseOptions<typeof parseArgOptions>;
+type RawCliValues = Record<string, string | boolean | (string | boolean)[] | undefined>;
+
 if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
 }
 
 const relaySignals = (childProcess: ChildProcess, ipcSocket: Server) => {
 	let waitForSignal: ((signal: NodeJS.Signals) => void) | undefined;
-	const isSignalMessage = (data: unknown): data is { type: 'signal', signal: NodeJS.Signals } => (data !== null && typeof data === 'object' && 'type' in data && data.type === 'signal' && 'signal' in data && typeof data.signal === 'string' && Object.hasOwn(constants.signals, data.signal));
+	const isSignalMessage = (data: unknown): data is { type: 'signal', signal: NodeJS.Signals } => {
+		return (data !== null && typeof data === 'object' && 'type' in data && data.type === 'signal' && 'signal' in data && typeof data.signal === 'string' && Object.hasOwn(constants.signals, data.signal));
+	};
 
 	ipcSocket.on('data', (data: unknown) => {
 		if (isSignalMessage(data) && waitForSignal) { waitForSignal(data.signal) }
@@ -109,6 +118,7 @@ const extractRuntimeEquivalentLeadingFlags = (argv: string[]) => {
 
 	while (index < argv.length) {
 		const argument = argv[index];
+
 		if (argument === undefined || !argument.startsWith('-')) { break }
 
 		if (argument === '--') {
@@ -116,6 +126,7 @@ const extractRuntimeEquivalentLeadingFlags = (argv: string[]) => {
 		}
 
 		if (!isRuntimeEquivalentFlag(argument)) { return undefined }
+
 		(flags ??= []).push(argument);
 		index += 1;
 	}
@@ -152,19 +163,13 @@ const parseArgOptions = {
 	print: { type: 'string', short: 'p' }
 } satisfies ParseArgsOptionsConfig;
 
-type CliValuesFromParseOptions<Options extends ParseArgsOptionsConfig> = {
-	[Name in keyof Options]?: Options[Name] extends { type: 'string' } ? string : Options[Name] extends { type: 'boolean' } ? boolean : never;
-};
-
-type ParsedCliValues = CliValuesFromParseOptions<typeof parseArgOptions>;
-
-type RawCliValues = Record<string, string | boolean | (string | boolean)[] | undefined>;
-
 const normalizeCliValues = (rawValues: RawCliValues): ParsedCliValues => {
 	const values: ParsedCliValues = {};
 	const normalizeString = (name: string) => {
 		const value = rawValues[name];
+
 		if (value === undefined) { return undefined }
+
 		if (typeof value !== 'string') { throw new TypeError(`Option --${name} requires a string value`) }
 
 		return value;
@@ -215,8 +220,7 @@ if (rawArgv[0] === 'watch') {
 	const { findFirstPositionalIndex, removeArgvFlags, canForwardWorkerExecArgv } = await import('./remove-argv-flags');
 	const firstPositionalIndex = findFirstPositionalIndex(executionFlags, rawArgv);
 
-	// `tsnode <script>` with no leading flags has nothing to parse. Skipping the
-	// call also keeps `node:util` (~3ms to initialize) out of the common path.
+	// `tsnode <script>` with no leading flags has nothing to parse. Skipping the call also keeps `node:util` (~3ms to initialize) out of the common path.
 	const flagArgv = firstPositionalIndex === -1 ? rawArgv : rawArgv.slice(0, firstPositionalIndex);
 	const values: ParsedCliValues = flagArgv.length === 0 ? {} : await parseCliValues(flagArgv);
 
@@ -246,7 +250,7 @@ if (rawArgv[0] === 'watch') {
 	}
 
 	// Default --test glob to find TypeScript files
-	if (values.test && firstPositionalIndex === -1) { argvFlagsToRun.push('**/{test,test/**/*,test-*,*[.-_]test}.?(c|m)@(t|j)s') }
+	if (values.test && firstPositionalIndex === -1) { argvFlagsToRun.push('**/{test,test/**/*,test-*,*[.-_]test}.@(t|j)s') }
 
 	/**
 	 * Forking exists to apply Node flags and `--import` preloads at bootstrap, and to relay signals/IPC.

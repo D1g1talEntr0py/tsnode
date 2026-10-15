@@ -4,8 +4,9 @@ import path from 'node:path';
 import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir as osTmpdir } from 'node:os';
 import { afterEach, describe, expect, test } from 'vitest';
-import { closeIpcServer, createIpcServer } from '../src/utils/ipc/server';
+import { bufferData, closeIpcServer, createIpcServer } from '../src/utils/ipc/server';
 import { assertPrivateDirectory, ensurePrivateDirectory, tmpdir } from '../src/utils/temporary-directory';
+import { Json } from '../src/utils/json';
 
 const pipePathForTest = () => {
 	const pipeName = `ipc-${randomUUID()}.pipe`;
@@ -55,6 +56,37 @@ const closeSocket = (socket: net.Socket) => new Promise<void>((resolve) => {
 
 describe('IPC server', () => {
 	let server: net.Server | undefined;
+
+	test('reassembles every split boundary and bytewise UTF-8 without socket coalescing', () => {
+		const first = { type: 'dependency', path: '/tmp/\u00e9\u{1f642}.ts' };
+		const second = { type: 'signal', signal: 'SIGINT' };
+		const input = Buffer.concat([frame(''), frame(Json.serialize(first)!), frame('{malformed}'), frame(Json.serialize(second)!)]);
+		for (let split = 1; split < input.length; split += 1) {
+			const messages: unknown[] = [];
+			const decode = bufferData(message => {
+				try { messages.push(Json.parse(message.toString())) } catch {}
+			}, () => { throw new Error('Unexpected invalid length') });
+			decode(input.subarray(0, split));
+			decode(input.subarray(split));
+			expect(messages).toEqual([first, second]);
+		}
+		const payloads: Buffer[] = [];
+		const decode = bufferData(message => payloads.push(message), () => { throw new Error('Unexpected invalid length') });
+		for (let index = 0; index < input.length; index += 1) { decode(input.subarray(index, index + 1)) }
+		expect(payloads.map(payload => payload.toString())).toEqual(['', Json.serialize(first), '{malformed}', Json.serialize(second)]);
+	});
+
+	test.each([-1, 10 * 1024 * 1024 + 1])('rejects a fragmented invalid prefix: %i', (length) => {
+		const input = frame('', length);
+		for (let split = 1; split < 4; split += 1) {
+			let invalid = 0;
+			const decode = bufferData(() => { throw new Error('Unexpected message') }, () => { invalid += 1 });
+			decode(input.subarray(0, split));
+			expect(invalid).toBe(0);
+			decode(input.subarray(split));
+			expect(invalid).toBe(1);
+		}
+	});
 
 	afterEach(async () => {
 		if (server) {
@@ -139,6 +171,24 @@ describe('IPC server', () => {
 
 		await expect(message).resolves.toEqual({ type: 'dependency', path: '/tmp/example.ts' });
 		expect(messages).toEqual([{ type: 'dependency', path: '/tmp/example.ts' }]);
+		await closeSocket(socket);
+	});
+
+	test('decodes coalesced frames independently including empty and multibyte payloads', async () => {
+		const testPipePath = pipePathForTest();
+		server = await createIpcServer(testPipePath);
+		const messages: unknown[] = [];
+		const completed = Promise.withResolvers<void>();
+		server.on('data', (message) => {
+			messages.push(message);
+			if (messages.length === 2) { completed.resolve() }
+		});
+		const socket = await connect(testPipePath);
+		const first = { type: 'dependency', path: '/tmp/\u00e9.ts' };
+		const second = { type: 'signal', signal: 'SIGTERM' };
+		socket.write(Buffer.concat([ frame(''), frame(Json.serialize(first)!), frame('{malformed}'), frame(Json.serialize(second)!) ]));
+		await completed.promise;
+		expect(messages).toEqual([ first, second ]);
 		await closeSocket(socket);
 	});
 

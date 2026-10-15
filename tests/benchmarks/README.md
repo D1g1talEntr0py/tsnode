@@ -1,6 +1,6 @@
 # Benchmark
 
-Measures tsnode startup across **scenarios**, **Node versions**, and **project sizes**. Built to isolate where startup time goes — Node's floor, the hook-registration tax, resolution, and transform — rather than one blended number. Motivated by [#809](https://github.com/privatenumber/tsx/issues/809).
+Measures tsnode startup across **scenarios** and **project sizes**. Built to isolate where startup time goes — Node's floor, the hook-registration tax, resolution, and transform — rather than one blended number. Motivated by [#809](https://github.com/privatenumber/tsx/issues/809).
 
 ## Usage
 
@@ -41,7 +41,6 @@ The default set remains focused on high-signal startup and transform behavior.
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-n, --node` | Additional Node version to test, downloaded via get-node (repeatable) | current |
 | `-m, --modules` | Module count (ignored with `--scale`) | `1000` |
 | `-s, --specifier` | `esm-ts` import style: `ts`, `js`, `extensionless` | `ts` |
 | `-r, --runs` | Timed runs per cell | `5` |
@@ -54,10 +53,10 @@ Progress goes to stderr; result tables / JSON to stdout.
 ## Metrics
 
 - **wall** — parent-measured spawn→exit; the headline, reported as mean ± stdev and **min**. Prefer min when comparing: run-to-run CV was ~6% median in the sweep, and min is the more stable statistic for startup timing.
-- **rss** (`--json` only) — peak RSS (`resourceUsage().maxRSS`). Small spread across implementations; useful for checking that loader changes do not move memory independently from wall time.
+- **rss** (`--json` only) — child peak RSS sampled at exit. Linux uses `/proc/self/status` `VmHWM`; other platforms use `resourceUsage().maxRSS`. Separate descendants, including esbuild's service process, are excluded.
 - **load / eval split** (`--json` only) — each module timestamps its first evaluation; since ESM evaluates post-order, the earliest ≈ "graph loaded/transformed" and the entry's last ≈ "graph evaluated". Eval was a negligible share on synthetic trees, so it's recorded in JSON but kept out of the table.
 
-JSON `rss` is the instrumented child's `resourceUsage().maxRSS` in KiB, not the parent benchmark's allocations. `benchmark:compare` uses mitata, whose memory rows describe parent-process allocation during child spawning and cleanup, not child peak RSS; those allocations can differ between runners. `pnpm benchmark:memory` only prints a profiling guide and does not collect a profile.
+JSON `maxRssKb` is the instrumented child's exit-time peak RSS in KiB, not the parent benchmark's allocations. On Linux, `/proc` avoids inherited parent high-water RSS across fork/exec. If `/proc` cannot be read, the reporter falls back to `resourceUsage().maxRSS`, which can retain that bias. Graph evaluation timestamps are captured before exit, independently of this memory sample. Any mitata allocation statistics describe the parent benchmark process, not child peak RSS. `pnpm benchmark:memory` only prints a profiling guide and does not collect a profile.
 
 For child RSS measurements use the JSON harness, or GNU `/usr/bin/time -v` on Linux for a real workload:
 
@@ -67,14 +66,6 @@ pnpm --silent benchmark esm-ts --modules 1000 --runs 5 --json > results.json
 ```
 
 Bash's built-in `time` and `TIMEFORMAT` do not support a `%M` peak-memory field. macOS uses `/usr/bin/time -l`, with different output and units. Keep Node version, workload, source-map settings, and cache state consistent when comparing RSS.
-
-## Node version axis
-
-tsnode requires Node.js 24.11.1 or newer and always uses sync `module.registerHooks()` (in-thread). Use `--node` to compare supported Node versions, not async-vs-sync hook registration:
-
-```sh
-pnpm benchmark hooks-passthrough --node 24.11.1
-```
 
 ## Reproducibility
 

@@ -1,4 +1,5 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { Json } from './json';
 import { createPathsMatcher, parseTsconfig, type PathsMatcher } from './tsconfig-parser';
 import type { TypeScriptConfiguration } from '../types';
 
@@ -12,9 +13,9 @@ export const resolveTsconfigPaths = (configuration: TypeScriptConfiguration, spe
 	return pathMatchers.get(configuration)?.(specifier) ?? [];
 };
 
-export const isFileIncluded = (_configuration: TypeScriptConfiguration, _filePath: string) => true;
-
-export const getTsconfigCacheKey = (configPath = 'tsconfig.json', configuration = loadTsconfig(configPath)) => configuration ? configIdentities.get(configuration) ?? JSON.stringify(configuration) : `${resolve(configPath)}\0missing`;
+export const getTsconfigCacheKey = (configPath = 'tsconfig.json', configuration = loadTsconfig(configPath)) => {
+	return configuration ? configIdentities.get(configuration) ?? Json.serialize(configuration) : `${resolve(configPath)}\0missing`;
+};
 
 export const loadTsconfig = (configPath = 'tsconfig.json'): TypeScriptConfiguration | undefined => {
 	const resolvedConfigPath = resolve(configPath);
@@ -30,7 +31,7 @@ export const loadTsconfig = (configPath = 'tsconfig.json'): TypeScriptConfigurat
 
 		if (sources.length > identitySourceLimit) { throw new Error('Invalid tsconfig') }
 
-		const identity = JSON.stringify(sources);
+		const identity = Json.serialize(sources);
 		const cached = tsconfigCache.get(resolvedConfigPath);
 
 		if (cached?.identity === identity) { return cached.configuration }

@@ -1,4 +1,5 @@
-import type { FileTree } from 'fs-fixture';
+import { Json } from '../../../src/utils/json';
+import type { FileTree } from '../../utils/fixture';
 
 export type SpecifierStyle = 'ts' | 'js' | 'extensionless';
 export type NonErasableSyntax = 'enum' | 'namespace' | 'decorator';
@@ -19,16 +20,23 @@ const evalMark = '(globalThis.__bench ??= []).push(performance.now());';
 
 /**
  * Printed as the last stdout line by every scenario entry. The runner parses it.
- * maxRSS is kilobytes (Node normalizes `resourceUsage().maxRSS` to KB).
+ * Peak RSS is sampled at exit and excludes separate descendant processes.
  */
 export const metricsReporter = `{
 	const __t = globalThis.__bench ?? [];
 	const __now = performance.now();
-	console.log('__BENCH__' + JSON.stringify({
-		first: __t.length > 0 ? Math.min(...__t) : __now,
-		last: __now,
-		maxRssKb: process.resourceUsage().maxRSS,
-	}));
+	const __first = __t.length > 0 ? Math.min(...__t) : __now;
+	process.once('exit', () => {
+		let __rss = process.resourceUsage().maxRSS;
+		if (process.platform === 'linux') {
+			try {
+				const __status = process.getBuiltinModule('node:fs').readFileSync('/proc/self/status', 'utf8');
+				const __match = /^VmHWM:\\s+(\\d+)\\s+kB$/m.exec(__status);
+				if (__match) { __rss = Number(__match[1]); }
+			} catch {}
+		}
+		console.log('__BENCH__' + JSON.stringify({ first: __first, last: __now, maxRssKb: __rss }));
+	});
 }`;
 
 const childrenOf = (index: number, moduleCount: number) => (
@@ -126,12 +134,12 @@ const baseCompilerOptions = {
 };
 
 export const createTsconfigForTree = (compilerOptions?: Record<string, unknown>): FileTree => ({
-	'tsconfig.json': JSON.stringify({
+	'tsconfig.json': Json.serialize({
 		compilerOptions: {
 			...baseCompilerOptions,
 			...compilerOptions,
 		},
-	}),
+	})!,
 });
 
 export const tsconfigForTree: FileTree = createTsconfigForTree();

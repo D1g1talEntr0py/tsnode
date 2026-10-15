@@ -1,15 +1,16 @@
 import path from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { rename, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { spawn } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
-import { createFixture } from 'fs-fixture';
-import { childEnvironment } from './utils/fixture';
+import { childEnvironment, createFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const cliPath = path.join(projectRoot, 'src/cli.ts');
 const sourceResolveHookPath = path.join(projectRoot, 'tests/utils/source-resolve-hook.ts');
 const tsconfigForFixture = {
-	'tsconfig.json': JSON.stringify({ compilerOptions: { target: 'esnext', module: 'esnext' } }),
+	'tsconfig.json': Json.serialize({ compilerOptions: { target: 'esnext', module: 'esnext' } })!,
 };
 
 type SpawnResult = {
@@ -74,7 +75,7 @@ const runWatch = (args: string[], cwd: string, env: Record<string, string> = {})
 describe('watch integration', () => {
 	test('missing includes fail before starting the child and leave no live watcher', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			'main.ts': 'console.log("unexpected-child"); setInterval(() => {}, 1000);\n',
 		});
 		const watch = runWatch(['--include', 'missing.ts', 'main.ts'], fixture.path);
@@ -91,7 +92,7 @@ describe('watch integration', () => {
 
 	test.skipIf(process.platform === 'win32')('restarts and shuts down after a child exits by signal', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'process.stdout.write(`self-exit:${process.pid}\\n`, () => process.kill(process.pid, "SIGTERM"));\n',
 		});
@@ -118,7 +119,7 @@ describe('watch integration', () => {
 		}
 	});
 	test('reports missing script paths and supports help', async () => {
-		await using fixture = await createFixture({ 'package.json': JSON.stringify({ type: 'module' }) });
+		await using fixture = await createFixture({ 'package.json': Json.serialize({ type: 'module' })! });
 
 		const missing = runWatch([], fixture.path);
 		const missingResult = await missing.exited;
@@ -133,15 +134,16 @@ describe('watch integration', () => {
 
 	test('reruns after a watched file changes', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'import { value } from "./value.ts"; console.log(`watch:${value}`); setInterval(() => {}, 1000);\n',
 			'value.ts': 'export const value: number = 1;\n',
 		});
-		const watch = runWatch(['main.ts'], fixture.path);
+		const watch = runWatch(['main.ts'], fixture.path, { TSNODE_DEBUG: '1' });
 
 		try {
 			await watch.waitForOutput('watch:1');
+			await watch.waitForOutput(`Watching dependency ${path.join(fixture.path, 'value.ts')}`);
 			await writeFile(path.join(fixture.path, 'value.ts'), 'export const value: number = 2;\n');
 			await watch.waitForOutput('watch:2');
 		} finally {
@@ -149,9 +151,77 @@ describe('watch integration', () => {
 		}
 	});
 
+	test('keeps exact dependency coverage across atomic saves without watching siblings', async () => {
+		await using fixture = await createFixture({
+			'package.json': Json.serialize({ type: 'module' })!,
+			...tsconfigForFixture,
+			'main.ts': 'import { value } from "./value.ts"; console.log(`atomic:${value}`); setInterval(() => {}, 1000);\n',
+			'value.ts': 'export const value: number = 1;\n',
+			'unrelated.ts': 'export const value = 0;\n',
+		});
+		const watch = runWatch(['main.ts'], fixture.path, { TSNODE_DEBUG: '1' });
+		try {
+			await watch.waitForOutput('atomic:1');
+			const dependencyReady = `Watching dependency ${path.join(fixture.path, 'value.ts')}`;
+			await watch.waitForOutput(dependencyReady);
+			await writeFile(path.join(fixture.path, 'value.ts'), 'export const value: number = 2;\n');
+			await watch.waitForOutput('atomic:2');
+			await watch.waitForOutput(dependencyReady, 2);
+			await writeFile(path.join(fixture.path, 'replacement.ts'), 'export const value: number = 3;\n');
+			await rename(path.join(fixture.path, 'replacement.ts'), path.join(fixture.path, 'value.ts'));
+			await watch.waitForOutput('atomic:3');
+			await watch.waitForOutput(dependencyReady, 3);
+			await writeFile(path.join(fixture.path, 'replacement.ts'), 'export const value: number = 4;\n');
+			await rename(path.join(fixture.path, 'replacement.ts'), path.join(fixture.path, 'value.ts'));
+			await watch.waitForOutput('atomic:4');
+			await watch.waitForOutput(dependencyReady, 4);
+			const runsBefore = watch.read().stdout.split('atomic:').length - 1;
+			await writeFile(path.join(fixture.path, 'unrelated.ts'), 'export const value = 1;\n');
+			await delay(200);
+			expect(watch.read().stdout.split('atomic:').length - 1).toBe(runsBefore);
+			expect(watch.read().stderr).toBe('');
+		} finally {
+			await watch.stop();
+		}
+	});
+
+	test('prunes stale dependencies but retains explicit includes that overlap the import graph', async () => {
+		await using fixture = await createFixture({
+			'package.json': Json.serialize({ type: 'module' })!,
+			...tsconfigForFixture,
+			'main.ts': 'import { readFile } from "node:fs/promises"; const name = (await readFile("mode.txt", "utf8")).trim(); const { value } = await import(`./${name}.ts`); await import("./included/value.ts"); console.log(`active:${value}`); setInterval(() => {}, 1000);\n',
+			'mode.txt': 'old',
+			'old.ts': 'export const value = "old";\n',
+			'new.ts': 'export const value = "new";\n',
+			'included/value.ts': 'export const included = 1;\n',
+		});
+		const watch = runWatch(['--include', 'mode.txt', '--include', 'included', 'main.ts'], fixture.path, { TSNODE_DEBUG: '1' });
+		try {
+			await watch.waitForOutput('active:old');
+			await watch.waitForOutput(`Watching dependency ${path.join(fixture.path, 'old.ts')}`);
+			await writeFile(path.join(fixture.path, 'mode.txt'), 'new');
+			await watch.waitForOutput('active:new');
+			await watch.waitForOutput(`Watching dependency ${path.join(fixture.path, 'new.ts')}`);
+			watch.childProcess.stdin!.write('\n');
+			await watch.waitForOutput('active:new', 2);
+			await watch.waitForOutput(`Watching dependency ${path.join(fixture.path, 'new.ts')}`, 2);
+			const runsBefore = watch.read().stdout.split('active:').length - 1;
+			await writeFile(path.join(fixture.path, 'old.ts'), 'export const value = "stale";\n');
+			await delay(200);
+			expect(watch.read().stdout.split('active:').length - 1).toBe(runsBefore);
+			await writeFile(path.join(fixture.path, 'included/extra.ts'), 'export const extra = 1;\n');
+			await watch.waitForOutput('active:new', 3);
+			await writeFile(path.join(fixture.path, 'new.ts'), 'export const value = "updated";\n');
+			await watch.waitForOutput('active:updated');
+			expect(watch.read().stderr).toBe('');
+		} finally {
+			await watch.stop();
+		}
+	});
+
 	test('reruns when stdin receives a newline', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log("stdin-run"); setInterval(() => {}, 1000);\n',
 		});
@@ -168,7 +238,7 @@ describe('watch integration', () => {
 
 	test.skipIf(process.platform === 'win32')('relays SIGINT to the running script and exits cleanly', async () => {
 		await using fixture = await createFixture({
-			'package.json': JSON.stringify({ type: 'module' }),
+			'package.json': Json.serialize({ type: 'module' })!,
 			...tsconfigForFixture,
 			'main.ts': 'console.log("signal-ready"); setInterval(() => {}, 1000);\n',
 		});

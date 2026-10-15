@@ -1,13 +1,13 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { createFixture } from 'fs-fixture';
+import { createFixture } from '../utils/fixture';
 import type { SpecifierStyle } from './utils/generate-fixture';
 import { scenarios, type Scenario } from './utils/scenarios';
 import { resolveComparison, type ComparisonImplementation } from './utils/resolve-tsx';
-import { resolveNode, type NodeBinary } from './utils/resolve-node';
 import { runOnce, type RunResult } from './utils/run';
 import { mean, standardDeviation, linearFit } from './utils/stats';
+import { Json } from '../../src/utils/json';
 
 const specifierStyles: SpecifierStyle[] = ['ts', 'js', 'extensionless'];
 const scaleCounts = [10, 100, 300, 1000];
@@ -20,11 +20,6 @@ const parsed = parseArgs({
 		compare: {
 			type: 'string',
 			short: 'c',
-			multiple: true,
-		},
-		node: {
-			type: 'string',
-			short: 'n',
 			multiple: true,
 		},
 		modules: {
@@ -55,14 +50,17 @@ const parsed = parseArgs({
 	},
 });
 
+if (parsed.values['node'] || parsed.values['n']) {
+	throw new Error('The --node option is no longer supported; benchmarks use the current Node.js version');
+}
+
 if (parsed.values.help) {
-	process.stdout.write('Measures tsnode startup across scenarios, Node versions, and project sizes\n');
+	process.stdout.write('Measures tsnode startup across scenarios and project sizes\n');
 	process.stdout.write('Usage: tsnode tests/benchmarks/index.ts [scenarios...] [options]\n');
 	process.exit(0);
 }
 
 const compare = (parsed.values.compare ?? []) as string[];
-const nodeVersions = (parsed.values.node ?? []) as string[];
 const modules = Number(parsed.values.modules ?? 1000);
 const specifier = (parsed.values.specifier ?? 'ts') as SpecifierStyle;
 const runs = Number(parsed.values.runs ?? 5);
@@ -123,7 +121,7 @@ type Row = {
 
 const measureCell = async (
 	scenario: Scenario,
-	node: NodeBinary,
+	nodePath: string,
 	cliPath: string,
 	fixturePath: string,
 ): Promise<RunResult[]> => {
@@ -135,29 +133,17 @@ const measureCell = async (
 	if (usesCache) {
 		await clearTransformCache();
 	}
-	await runOnce(node.path, args, fixturePath, isolatedCacheEnv);
+	await runOnce(nodePath, args, fixturePath, isolatedCacheEnv);
 
 	const results: RunResult[] = [];
 	for (let run = 0; run < runs; run += 1) {
 		if (usesCache && cold) {
 			await clearTransformCache();
 		}
-		results.push(await runOnce(node.path, args, fixturePath, isolatedCacheEnv));
+		results.push(await runOnce(nodePath, args, fixturePath, isolatedCacheEnv));
 	}
 	return results;
 };
-
-// Resolve Node binaries (current + any --node), de-duplicated by version
-const nodeBinaries: NodeBinary[] = [];
-const resolvedBinaries = await Promise.all([
-	resolveNode(),
-	...nodeVersions.map(version => resolveNode(version)),
-]);
-for (const binary of resolvedBinaries) {
-	if (!nodeBinaries.some(existing => existing.version === binary.version)) {
-		nodeBinaries.push(binary);
-	}
-}
 
 // tsx implementations: local + comparisons (npm/path)
 await using installRoot = await createFixture();
@@ -186,34 +172,32 @@ for (const scenario of selectedScenarios) {
 		},
 	};
 
-	for (const node of nodeBinaries) {
-		// node-runner scenarios (baseline/native) ignore --compare
-		const cells = (
-			scenario.runner === 'node' || scenario.implementations === 'local-only'
-				? [{
-					name: scenario.runner === 'node' ? 'node' : 'local',
-					cliPath: scenario.runner === 'node' ? '' : implementations[0]!.cliPath,
-				}]
-				: implementations
-		);
-		for (const { name, cliPath } of cells) {
-			for (const [index, moduleCount] of moduleCounts.entries()) {
-				log(`  ${scenario.name} · Node ${node.version} · ${name} · ${moduleCount} modules`);
-				const results = await measureCell(scenario, node, cliPath, fixtures[index]!.path);
-				rows.push({
-					scenario: scenario.name,
-					nodeVersion: node.version,
-					impl: name,
-					moduleCount,
-					results,
-				});
-			}
+	// node-runner scenarios (baseline/native) ignore --compare
+	const cells = (
+		scenario.runner === 'node' || scenario.implementations === 'local-only'
+			? [{
+				name: scenario.runner === 'node' ? 'node' : 'local',
+				cliPath: scenario.runner === 'node' ? '' : implementations[0]!.cliPath,
+			}]
+			: implementations
+	);
+	for (const { name, cliPath } of cells) {
+		for (const [index, moduleCount] of moduleCounts.entries()) {
+			log(`  ${scenario.name} · Node ${process.versions.node} · ${name} · ${moduleCount} modules`);
+			const results = await measureCell(scenario, process.execPath, cliPath, fixtures[index]!.path);
+			rows.push({
+				scenario: scenario.name,
+				nodeVersion: process.versions.node,
+				impl: name,
+				moduleCount,
+				results,
+			});
 		}
 	}
 }
 
 if (json) {
-	process.stdout.write(`${JSON.stringify({
+	process.stdout.write(`${Json.serialize({
 		meta: {
 			runs,
 			cold,

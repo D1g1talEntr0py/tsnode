@@ -2,14 +2,23 @@ import path from 'node:path';
 import { parseTsconfig, type ParseTsconfigOptions, type TypeScriptConfig, type TsConfigResult } from '../../../src/utils/tsconfig-parser';
 import { findUp } from '../../../src/utils/tsconfig-parser/utils/find-up';
 import { toPosixPath } from '../../../src/utils/tsconfig-parser/utils/to-posix-path';
+import { Json } from '../../../src/utils/json';
 
 export const createTsconfigJson = (
 	tsconfig: TypeScriptConfig
-) => JSON.stringify(tsconfig);
+) => {
+	const serialized = Json.serialize(tsconfig);
+	if (serialized === undefined) { throw new TypeError('Fixture tsconfig must serialize to JSON') }
+	return serialized;
+};
 
 export const createPackageJson = (
 	packageJson: Record<string, unknown>
-) => JSON.stringify(packageJson);
+) => {
+	const serialized = Json.serialize(packageJson);
+	if (serialized === undefined) { throw new TypeError('Fixture package must serialize to JSON') }
+	return serialized;
+};
 
 /**
  * Test stand-in for the removed `getTsconfig`: finds the nearest tsconfig.json and parses it.

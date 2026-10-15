@@ -280,6 +280,12 @@ You still get normal Node REPL behavior:
 
 Watch mode reruns your script whenever relevant files change.
 
+It uses Watchr 4 and waits for the entry script and explicit `--include` targets to start watching before launching the child. Imported dependencies are discovered and attached asynchronously as the child reports them; existing files do not trigger initial reruns. Only these targets are watched, not the entire working directory. Runtime dependency watchers are pruned when no longer used, while explicit includes remain watched. File targets continue watching atomic-save replacements.
+
+An edit before a newly discovered dependency finishes attaching can fall into its initial scan without triggering a rerun. Set `TSNODE_DEBUG=1` to see `Watching dependency <absolute path>` after each dependency is ready.
+
+Watchr 4 no longer supports the previous watcher-level debounce option. Watch mode still coalesces events received while a restart is in progress, but does not impose a fixed debounce delay.
+
 ```sh
 tsnode watch ./src/main.ts
 ```

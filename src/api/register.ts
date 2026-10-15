@@ -104,7 +104,7 @@ const withVirtualSources = (options: RegisterOptions | undefined, resolve: Resol
 
 	return (specifier, context, nextResolve) => {
 		const request = getModuleRequest(specifier);
-		if (request?.namespace ?? getNamespace(specifier) ?? (context.parentURL ? getNamespace(context.parentURL) : undefined) === namespace) {
+		if ((request?.namespace ?? getNamespace(specifier) ?? (context.parentURL ? getNamespace(context.parentURL) : undefined)) === namespace) {
 			let sourceUrl = request?.specifier ?? specifier;
 
 			if (sourceUrl.startsWith('./') || sourceUrl.startsWith('../')) {

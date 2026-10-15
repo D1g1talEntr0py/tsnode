@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { writeFileSync } from 'node:fs';
-import { createFixture } from 'fs-fixture';
 import { describe, expect, test, vi } from 'vitest';
+import { createFixture } from './utils/fixture';
 import { createData, ensureParsedTsconfig } from '../src/hook/initialize';
 import * as tsconfigUtilities from '../src/utils/tsconfig';
+import { Json } from '../src/utils/json';
 
 describe('hook initialize', () => {
 	test('new registrations see missing-created and edited configs while existing registrations keep their snapshot', async () => {
@@ -11,12 +12,12 @@ describe('hook initialize', () => {
 		const configPath = path.join(fixture.path, 'tsconfig.json');
 		const missing = createData({ tsconfig: configPath });
 		expect(ensureParsedTsconfig(missing)).toBeUndefined();
-		writeFileSync(configPath, JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } }));
+		writeFileSync(configPath, Json.serialize({ compilerOptions: { jsx: 'react-jsx' } })!);
 		const first = createData({ tsconfig: configPath });
 		const original = ensureParsedTsconfig(first);
 		expect(original?.compilerOptions.jsx).toBe('react-jsx');
 		expect(ensureParsedTsconfig(missing)).toBeUndefined();
-		writeFileSync(configPath, JSON.stringify({ compilerOptions: { jsx: 'react' } }));
+		writeFileSync(configPath, Json.serialize({ compilerOptions: { jsx: 'react' } })!);
 		expect(ensureParsedTsconfig(createData({ tsconfig: configPath }))?.compilerOptions.jsx).toBe('react');
 		expect(ensureParsedTsconfig(first)).toBe(original);
 	});
@@ -89,7 +90,7 @@ describe('hook initialize', () => {
 
 	test('ensureParsedTsconfig parses the configured file once and caches the result', async () => {
 		await using fixture = await createFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true, paths: { '@/*': ['src/*'] } } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { allowJs: true, paths: { '@/*': ['src/*'] } } })!,
 		});
 		const data = createData({ tsconfig: path.join(fixture.path, 'tsconfig.json') });
 

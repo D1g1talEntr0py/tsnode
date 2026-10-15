@@ -1,9 +1,15 @@
-import { transform } from 'esbuild';
+import { transform, type TransformOptions } from 'esbuild';
 import repl, { type REPLServer, type REPLEval } from 'node:repl';
 import { syncBuiltinESMExports } from 'node:module';
 
+/**
+ * Patches the Node.js REPL to transform TypeScript code to JavaScript before evaluation.
+ * @param nodeRepl The Node.js REPL server instance to patch.
+ * @returns The patched REPL server instance.
+ */
 const patchEval = (nodeRepl: REPLServer) => {
 	const { eval: defaultEval } = nodeRepl;
+
 	/**
 	 * A custom REPL eval function that transforms TypeScript code to JavaScript before evaluation.
 	 * @param code The TypeScript code to evaluate.
@@ -15,7 +21,7 @@ const patchEval = (nodeRepl: REPLServer) => {
 		void (async () => {
 			const options = {
 				sourcefile, loader: 'ts', tsconfigRaw: { compilerOptions: { preserveValueImports: true } }, define: { require: 'global.require' }
-			} satisfies Parameters<typeof transform>[1];
+			} satisfies TransformOptions;
 
 			try { ({ code } = (await transform(code, options))) } catch { /* ignore */ }
 
@@ -30,6 +36,7 @@ const patchEval = (nodeRepl: REPLServer) => {
 };
 
 const { start } = repl;
+
 /**
  * A patched version of the Node.js REPL that transforms TypeScript code to JavaScript before evaluation.
  * @param args The arguments to pass to the Node.js REPL start function.
@@ -38,4 +45,5 @@ const { start } = repl;
 repl.start = function(...args) {
 	return patchEval(Reflect.apply(start, this, args));
 };
+
 syncBuiltinESMExports();

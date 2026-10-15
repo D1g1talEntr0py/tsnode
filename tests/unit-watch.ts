@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { WatchrStats, type WatchrEventHandler, type WatchrOptions } from '@d1g1tal/watchr';
 
 type ChildExitListener = (exitCode: number | null) => void;
 
 const mocks = vi.hoisted(() => {
-	const watchPathMock = vi.fn(async () => {});
-	const watchersCloseMock = vi.fn();
 	const closeMock = vi.fn();
-	const readyMock = vi.fn(() => Promise.resolve());
-	const watcherOnMock = vi.fn();
+	const startMock = vi.fn(() => Promise.resolve());
 	const closeIpcServerMock = vi.fn(async () => {});
 	const createChildProcess = (exitCode: number | null = 0, emitExitImmediately = true) => {
 		const exitListeners: ChildExitListener[] = [];
@@ -44,18 +42,18 @@ const mocks = vi.hoisted(() => {
 	};
 	const runMock = vi.fn((): ChildProcess => createChildProcess());
 
-	let watchEventHandler: ((event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void) | undefined;
+	const watchers: WatchrMock[] = [];
 
 	class WatchrMock {
-		readyLock = readyMock();
-		on = watcherOnMock;
-		close = closeMock;
-		constructor(_targets: string | string[], _options: Record<string, unknown>, handler: (event: string, stats: unknown, targetPath: string, targetPathNext?: string) => void) {
-			watchEventHandler = handler;
+		close = vi.fn(() => { closeMock() });
+		constructor(readonly targets: string | string[], readonly options: WatchrOptions) {
+			watchers.push(this);
 		}
 
-		watchPath = watchPathMock;
-		watchersClose = watchersCloseMock;
+		async start() {
+			await startMock();
+			return this;
+		}
 	}
 
 	let dataListener: ((payload: unknown) => void) | undefined;
@@ -69,33 +67,29 @@ const mocks = vi.hoisted(() => {
 
 	return {
 		WatchrMock,
-		watchPathMock,
-		watchersCloseMock,
+		watchers,
 		closeMock,
-		readyMock,
-		watcherOnMock,
+		startMock,
 		closeIpcServerMock,
 		runMock,
 		createChildProcess,
 		createIpcServerMock,
 		getDataListener: () => dataListener,
-		getWatchEventHandler: () => watchEventHandler,
+		getWatchEventHandler: () => watchers[0]!.options.handlers!.all as WatchrEventHandler<'all'>,
 		reset: () => {
-			watchPathMock.mockReset();
-			watchersCloseMock.mockReset();
+			watchers.length = 0;
 			closeMock.mockClear();
-			readyMock.mockReset().mockResolvedValue(undefined);
-			watcherOnMock.mockReset();
+			startMock.mockReset().mockResolvedValue(undefined);
 			closeIpcServerMock.mockClear();
 			runMock.mockReset();
 			createIpcServerMock.mockReset();
 			dataListener = undefined;
-			watchEventHandler = undefined;
 		},
 	};
 });
 
-vi.mock('@d1g1tal/watchr', () => ({
+vi.mock('@d1g1tal/watchr', async importOriginal => ({
+	...await importOriginal<typeof import('@d1g1tal/watchr')>(),
 	Watchr: mocks.WatchrMock,
 }));
 
@@ -109,6 +103,9 @@ vi.mock('../src/utils/ipc/server', () => ({
 }));
 
 import { runWatchCommand, terminateProcess } from '../src/watch/index';
+
+const changeEvent = () => ({ type: 'change', path: 'entry.ts', stats: WatchrStats.synthetic(false), initial: false } as const);
+const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
 describe('watch command', () => {
 	let stdinDataHandler: (() => void) | undefined;
@@ -140,10 +137,10 @@ describe('watch command', () => {
 
 	test('does not spawn before Watchr is ready', async () => {
 		let ready: () => void = () => {};
-		mocks.readyMock.mockReturnValueOnce(new Promise<void>(resolve => { ready = resolve }));
+		mocks.startMock.mockReturnValueOnce(new Promise<void>(resolve => { ready = resolve }));
 		const starting = runWatchCommand(['entry.ts']);
 		await new Promise<void>(resolve => setImmediate(resolve));
-		mocks.getWatchEventHandler()!('change', undefined, 'entry.ts');
+		mocks.getWatchEventHandler()(changeEvent());
 		expect(mocks.runMock).not.toHaveBeenCalled();
 		ready();
 		await starting;
@@ -252,7 +249,7 @@ describe('watch command', () => {
 	});
 
 	test('waits for readiness and cleans up a rejected startup without spawning', async () => {
-		mocks.readyMock.mockRejectedValueOnce(new Error('Path not found'));
+		mocks.startMock.mockRejectedValueOnce(new Error('Path not found'));
 		const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 		await runWatchCommand(['--include', 'missing.ts', 'entry.ts']);
 		expect(mocks.runMock).not.toHaveBeenCalled();
@@ -282,13 +279,13 @@ describe('watch command', () => {
 	test('cleans up child and resources when a dynamic dependency cannot be watched', async () => {
 		const child = mocks.createChildProcess(null);
 		mocks.runMock.mockReturnValueOnce(child);
-		mocks.watchPathMock.mockRejectedValueOnce(new Error('Path not found'));
 		const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 		await runWatchCommand(['entry.ts']);
+		mocks.startMock.mockRejectedValueOnce(new Error('Path not found'));
 		mocks.getDataListener()!({ type: 'dependency', path: '/missing/dependency.ts' });
 		await new Promise<void>(resolve => setImmediate(resolve));
 		expect(child.kill).toHaveBeenCalledOnce();
-		expect(mocks.closeMock).toHaveBeenCalledOnce();
+		expect(mocks.closeMock).toHaveBeenCalledTimes(2);
 		expect(mocks.closeIpcServerMock).toHaveBeenCalledOnce();
 		expect(stderr).toHaveBeenCalledWith(expect.stringContaining('/missing/dependency.ts'));
 	});
@@ -306,8 +303,8 @@ describe('watch command', () => {
 		await runWatchCommand(['entry.ts']);
 
 		const watchEventHandler = mocks.getWatchEventHandler()!;
-		watchEventHandler('change', undefined, 'entry.ts');
-		watchEventHandler('change', undefined, 'entry.ts');
+		watchEventHandler(changeEvent());
+		watchEventHandler(changeEvent());
 
 		await new Promise<void>(resolve => setImmediate(resolve));
 		await new Promise<void>(resolve => setImmediate(resolve));
@@ -330,8 +327,112 @@ describe('watch command', () => {
 		stdinDataHandler!();
 		await new Promise<void>(resolve => setImmediate(resolve));
 
-		expect(mocks.watchersCloseMock).toHaveBeenCalledTimes(1);
-		expect(mocks.watchersCloseMock).toHaveBeenCalledWith('/tmp', '/tmp/first.ts');
-		expect(mocks.watchPathMock).toHaveBeenCalledTimes(2);
+		expect(mocks.watchers).toHaveLength(3);
+		expect(mocks.watchers[0]!.close).not.toHaveBeenCalled();
+		expect(mocks.watchers[1]!.targets).toBe('/tmp/first.ts');
+		expect(mocks.watchers[1]!.close).toHaveBeenCalledOnce();
+		expect(mocks.watchers[2]!.targets).toBe('/tmp/second.ts');
+		expect(mocks.watchers[2]!.close).not.toHaveBeenCalled();
+	});
+
+	test('uses configured payload handlers without initial reruns and logs rename destinations', async () => {
+		const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+		await runWatchCommand(['--clear-screen=false', 'entry.ts']);
+		expect(mocks.watchers[0]!.options).toMatchObject({ emitInitial: false, recursive: true });
+		expect(mocks.watchers[0]!.options).not.toHaveProperty('debounce');
+		mocks.getWatchEventHandler()({ ...changeEvent(), type: 'add', initial: true });
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledOnce();
+		mocks.getWatchEventHandler()({
+			type: 'rename', from: '/tmp/old.ts', to: '/tmp/new.ts',
+			stats: WatchrStats.synthetic(false), initial: false,
+		});
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledTimes(2);
+		expect(stdout).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.stringContaining('/tmp/new.ts'), expect.any(String));
+	});
+
+	test('reports operational errors through configured handlers and shuts down every watcher', async () => {
+		const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+		await runWatchCommand(['entry.ts']);
+		mocks.getDataListener()!({ type: 'dependency', path: '/tmp/dep.ts' });
+		await settle();
+		const onError = mocks.watchers[1]!.options.handlers!.error as WatchrEventHandler<'error'>;
+		onError(new Error('native watcher failed'));
+		await settle();
+		expect(stderr).toHaveBeenCalledWith(expect.stringContaining('native watcher failed'));
+		expect(mocks.closeMock).toHaveBeenCalledTimes(2);
+		expect(mocks.closeIpcServerMock).toHaveBeenCalledOnce();
+		expect(process.exitCode).toBe(1);
+	});
+
+	test('deduplicates pending dependencies and preserves overlapping explicit include coverage', async () => {
+		await runWatchCommand(['--include', '/tmp/included', 'entry.ts']);
+		const pending = Promise.withResolvers<void>();
+		mocks.startMock.mockReturnValueOnce(pending.promise);
+		const data = mocks.getDataListener()!;
+		data({ type: 'dependency', path: '/tmp/included/dep.ts' });
+		data({ type: 'dependency', path: `${process.cwd()}/entry.ts` });
+		data({ type: 'dependency', path: '/tmp/included-other/dep.ts' });
+		data({ type: 'dependency', path: 'file:///tmp/included-other/dep.ts' });
+		expect(mocks.watchers).toHaveLength(2);
+		expect(mocks.startMock).toHaveBeenCalledTimes(2);
+		pending.resolve();
+		await settle();
+		stdinDataHandler!();
+		await settle();
+		stdinDataHandler!();
+		await settle();
+		expect(mocks.watchers[0]!.close).not.toHaveBeenCalled();
+		expect(mocks.watchers[1]!.close).toHaveBeenCalledOnce();
+	});
+
+	test('waits for pending dependency starts before reconciling and coalesces reruns', async () => {
+		await runWatchCommand(['entry.ts']);
+		const pending = Promise.withResolvers<void>();
+		mocks.startMock.mockReturnValueOnce(pending.promise);
+		mocks.getDataListener()!({ type: 'dependency', path: '/tmp/dep.ts' });
+		stdinDataHandler!();
+		stdinDataHandler!();
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledOnce();
+		pending.resolve();
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledTimes(3);
+		expect(mocks.watchers[1]!.close).toHaveBeenCalledOnce();
+	});
+
+	test('queues live dependency events during startup until registration completes', async () => {
+		await runWatchCommand(['entry.ts']);
+		const pending = Promise.withResolvers<void>();
+		mocks.startMock.mockReturnValueOnce(pending.promise);
+		mocks.getDataListener()!({ type: 'dependency', path: '/tmp/dep.ts' });
+		const onEvent = mocks.watchers[1]!.options.handlers!.all as WatchrEventHandler<'all'>;
+		onEvent({ ...changeEvent(), path: '/tmp/dep.ts' });
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledOnce();
+		expect(mocks.watchers[1]!.close).not.toHaveBeenCalled();
+		pending.resolve();
+		await settle();
+		expect(mocks.runMock).toHaveBeenCalledTimes(2);
+		expect(mocks.watchers[1]!.close).not.toHaveBeenCalled();
+	});
+
+	test.each([false, true])('closes pending dependency starts on shutdown (reject=%s)', async (reject) => {
+		vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+		const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+		await runWatchCommand(['entry.ts']);
+		const pending = Promise.withResolvers<void>();
+		mocks.startMock.mockReturnValueOnce(pending.promise);
+		mocks.getDataListener()!({ type: 'dependency', path: '/tmp/dep.ts' });
+		signalHandlers.get('SIGINT')!('SIGINT');
+		if (reject) { pending.reject(new Error('closed during startup')) } else { pending.resolve() }
+		await settle();
+		mocks.getDataListener()!({ type: 'dependency', path: '/tmp/late.ts' });
+		expect(mocks.watchers).toHaveLength(2);
+		expect(mocks.closeMock).toHaveBeenCalledTimes(2);
+		expect(mocks.runMock).toHaveBeenCalledOnce();
+		expect(stderr).not.toHaveBeenCalled();
+		expect(process.exitCode).toBe(0);
 	});
 });

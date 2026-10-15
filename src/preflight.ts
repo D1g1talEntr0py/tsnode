@@ -9,6 +9,11 @@ if (process.env['NODE_DISABLE_COMPILE_CACHE'] !== '1') {
 	try { enableCompileCache() } catch { /* ignored */ }
 }
 
+/**
+ * Binds a hidden signal handler to the specified signals.
+ * @param signals The signals to bind the handler to.
+ * @param handler The signal handler to invoke.
+ */
 const bindHiddenSignalsHandler = (signals: NodeJS.Signals[], handler: SignalListener) => {
 	for (const signal of signals) {
 		const hiddenHandler = (receivedSignal: NodeJS.Signals) => {
@@ -22,6 +27,7 @@ const bindHiddenSignalsHandler = (signals: NodeJS.Signals[], handler: SignalList
 	}
 };
 
+// enableCompileCache must run before importing any modules that could be compiled
 const { connectingToServer } = await import('./utils/ipc/client');
 
 // Worker threads inherit preloads; signal relay only belongs in the CLI child main thread.
@@ -31,7 +37,7 @@ if (isMainThread) {
 
 		const sendToParent = await connectingToServer;
 
-		if (sendToParent) {
+		if (sendToParent !== undefined) {
 			bindHiddenSignalsHandler([ 'SIGINT', 'SIGTERM' ], (signal: NodeJS.Signals) => sendToParent({ type: 'signal', signal }));
 		}
 	})();

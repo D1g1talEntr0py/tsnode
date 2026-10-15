@@ -31,6 +31,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 import cache, { forEachConcurrent } from '../src/utils/transform/cache';
 import { tmpdir } from '../src/utils/temporary-directory';
+import { Json } from '../src/utils/json';
 
 const cacheDirectory = tmpdir;
 const markerPath = path.join(cacheDirectory, '.last-sweep');
@@ -87,6 +88,14 @@ describe('transform cache', () => {
 		expect(cache.has(key)).toBe(true);
 	});
 
+	test('rejects values whose toJSON returns undefined without retaining them', () => {
+		const key = `undefined-json-${randomUUID()}`;
+		const value = { code: 'export {}', toJSON: () => undefined };
+
+		expect(() => cache.set(key, value)).toThrow('Cache value must serialize to JSON');
+		expect(cache.has(key)).toBe(false);
+	});
+
 	test('writes queued entries to disk on the next turn', async () => {
 		const key = `queued-${randomUUID()}`;
 		const value = { code: 'export const value = 1;' };
@@ -99,7 +108,7 @@ describe('transform cache', () => {
 		await settle();
 
 		expect(fs.existsSync(filePath)).toBe(true);
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(value));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(value));
 		if (isPosix) {
 			expect(fs.statSync(cacheDirectory).mode & 0o777).toBe(0o700);
 			expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
@@ -117,7 +126,7 @@ describe('transform cache', () => {
 		await settle();
 
 		expect(fs.existsSync(filePath)).toBe(true);
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(value));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(value));
 	});
 
 	test('ignores synchronous chmod failures while flushing cache entries', async () => {
@@ -136,7 +145,7 @@ describe('transform cache', () => {
 		await settle();
 
 		expect(fs.existsSync(filePath)).toBe(true);
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(value));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(value));
 		chmodSyncSpy.mockRestore();
 	});
 
@@ -203,7 +212,7 @@ describe('transform cache', () => {
 			expect(coldCache.get('later-miss')).toBeUndefined();
 			expect(fs.readFileSync).not.toHaveBeenCalled();
 			expect(coldCache.get('entry-0')).toEqual({ code: 'value-0' });
-			fs.writeFileSync(path.join(directory, 'external'), JSON.stringify({ code: 'external' }));
+			fs.writeFileSync(path.join(directory, 'external'), Json.serialize({ code: 'external' })!);
 			expect(coldCache.get('external')).toEqual({ code: 'external' });
 			coldCache.clear();
 			await settle();
@@ -217,7 +226,7 @@ describe('transform cache', () => {
 	test('does not add an existence probe to ordinary warm disk hits', () => {
 		const key = `warm-probe-${randomUUID()}`;
 		const filePath = trackPath(cacheFilePath(key));
-		fs.writeFileSync(filePath, JSON.stringify({ code: 'warm' }));
+		fs.writeFileSync(filePath, Json.serialize({ code: 'warm' })!);
 		vi.mocked(fs.existsSync).mockClear();
 		expect(cache.get(key)).toEqual({ code: 'warm' });
 		expect(vi.mocked(fs.existsSync).mock.calls.some(([target]) => String(target) === filePath)).toBe(false);
@@ -296,7 +305,7 @@ describe('transform cache', () => {
 			const { default: disabledCache } = await import('../src/utils/transform/cache');
 			const diskKey = `disabled-disk-${randomUUID()}`;
 			const diskPath = trackPath(cacheFilePath(diskKey));
-			fs.writeFileSync(diskPath, JSON.stringify({ code: 'disk' }));
+			fs.writeFileSync(diskPath, Json.serialize({ code: 'disk' })!);
 			const prefix = `disabled-${randomUUID()}`;
 			for (let index = 0; index < 2100; index += 1) {
 				const key = `${prefix}-${index}`;
@@ -320,20 +329,20 @@ describe('transform cache', () => {
 		const filePath = trackPath(cacheFilePath(key));
 		const oldValue = { code: 'old' };
 		const newValue = { code: 'new' };
-		fs.writeFileSync(filePath, JSON.stringify(oldValue), { mode: 0o644 });
+		fs.writeFileSync(filePath, Json.serialize(oldValue)!, { mode: 0o644 });
 		const { renameSync: originalRename } = await vi.importActual<typeof import('node:fs')>('node:fs');
 		const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
 			expect(String(destination)).toBe(filePath);
 			expect(path.dirname(String(source))).toBe(cacheDirectory);
-			expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(oldValue));
-			expect(fs.readFileSync(source, 'utf-8')).toBe(JSON.stringify(newValue));
+			expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(oldValue));
+			expect(fs.readFileSync(source, 'utf-8')).toBe(Json.serialize(newValue));
 			if (isPosix) { expect(fs.statSync(source).mode & 0o777).toBe(0o600) }
 			originalRename(source, destination);
 		});
 		cache.set(key, newValue);
 		await settle();
 		expect(renameSpy).toHaveBeenCalledTimes(1);
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(newValue));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(newValue));
 		expect(fs.readdirSync(cacheDirectory).filter(name => name.startsWith(`${key}.`))).toEqual([]);
 	});
 
@@ -341,7 +350,7 @@ describe('transform cache', () => {
 		const key = `atomic-failure-${randomUUID()}`;
 		const filePath = trackPath(cacheFilePath(key));
 		const oldValue = { code: 'old' };
-		fs.writeFileSync(filePath, JSON.stringify(oldValue));
+		fs.writeFileSync(filePath, Json.serialize(oldValue)!);
 		if (failure === 'write') {
 			const { writeSync: originalWrite } = await vi.importActual<typeof import('node:fs')>('node:fs');
 			vi.spyOn(fs, 'writeSync').mockImplementation((...args) => {
@@ -353,7 +362,7 @@ describe('transform cache', () => {
 		}
 		cache.set(key, { code: 'new' });
 		await settle();
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(oldValue));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(oldValue));
 		expect(fs.readdirSync(cacheDirectory).filter(name => name.startsWith(`${key}.`))).toEqual([]);
 	});
 
@@ -368,7 +377,7 @@ describe('transform cache', () => {
 		});
 		cache.set(key, value);
 		await settle();
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(value));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(value));
 	});
 
 	test('expires old disk entries during maintenance', async () => {
@@ -382,8 +391,8 @@ describe('transform cache', () => {
 		const freshValue = { code: 'export const freshValue = true;' };
 		const oldTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
 
-		fs.writeFileSync(oldPath, JSON.stringify(oldValue));
-		fs.writeFileSync(freshPath, JSON.stringify(freshValue));
+		fs.writeFileSync(oldPath, Json.serialize(oldValue)!);
+		fs.writeFileSync(freshPath, Json.serialize(freshValue)!);
 		utimesSync(oldPath, oldTime, oldTime);
 
 		expect(freshCache.get(freshKey)).toEqual(freshValue);
@@ -402,19 +411,19 @@ describe('transform cache', () => {
 			const { readFileSync: originalRead } = await vi.importActual<typeof import('node:fs')>('node:fs');
 			vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
 				const contents = originalRead(...args);
-				if (String(args[0]) === filePath) { fs.writeFileSync(filePath, JSON.stringify(replacement)) }
+				if (String(args[0]) === filePath) { fs.writeFileSync(filePath, Json.serialize(replacement)!) }
 				return contents;
 			});
 			expect(cache.get(key)).toBeUndefined();
 		} else {
 			vi.mocked(fsPromises.readFile).mockImplementationOnce(async () => {
-				fs.writeFileSync(filePath, JSON.stringify(replacement));
+				fs.writeFileSync(filePath, Json.serialize(replacement)!);
 				return corrupt;
 			});
 			expect(await cache.getAsync(key)).toBeUndefined();
 		}
 		await settle();
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(replacement));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(replacement));
 		expect(cache.get(key)).toEqual(replacement);
 	});
 
@@ -423,7 +432,7 @@ describe('transform cache', () => {
 		const value = { code: 'export const value = 2;' };
 		const filePath = trackPath(cacheFilePath(key));
 
-		fs.writeFileSync(filePath, JSON.stringify(value));
+		fs.writeFileSync(filePath, Json.serialize(value)!);
 
 		expect(cache.get(key)).toEqual(value);
 		expect(cache.has(key)).toBe(true);
@@ -433,8 +442,8 @@ describe('transform cache', () => {
 		const key = `disk-bytes-${randomUUID()}`;
 		const filePath = trackPath(cacheFilePath(key));
 		const value = { code: '\u20ac'.repeat(1024), map: { version: 3, sources: [ 'source.ts' ], names: [], mappings: '' } };
-		fs.writeFileSync(filePath, JSON.stringify(value));
-		const stringifySpy = vi.spyOn(JSON, 'stringify');
+		fs.writeFileSync(filePath, Json.serialize(value)!);
+		const stringifySpy = vi.spyOn(Json, 'serialize');
 		const result = mode === 'sync' ? cache.get(key) : await cache.getAsync(key);
 		expect(stringifySpy).not.toHaveBeenCalled();
 		stringifySpy.mockRestore();
@@ -458,7 +467,7 @@ describe('transform cache', () => {
 		const key = `wrong-shape-${randomUUID()}`;
 		const filePath = trackPath(cacheFilePath(key));
 
-		fs.writeFileSync(filePath, JSON.stringify({ output: 'export {}' }));
+		fs.writeFileSync(filePath, Json.serialize({ output: 'export {}' })!);
 
 		expect(cache.get(key)).toBeUndefined();
 		await settle();
@@ -478,7 +487,7 @@ describe('transform cache', () => {
 		await settle();
 
 		expect(cache.get(key)).toEqual(replacement);
-		expect(fs.readFileSync(filePath, 'utf-8')).toBe(JSON.stringify(replacement));
+		expect(fs.readFileSync(filePath, 'utf-8')).toBe(Json.serialize(replacement));
 	});
 
 	test('bounds concurrent cache maintenance work', async () => {

@@ -25,12 +25,9 @@ const resolveFromPackageJsonPath = (packageJsonPath: string, subpath: string, ig
 	let resolvedPath = subpath || 'tsconfig.json';
 
 	if (!ignoreExports && packageJson.exports) {
-		try {
-			const [ resolvedExport ] = resolveExports(packageJson.exports, subpath, [ 'require', 'types', 'node' ]);
-			resolvedPath = resolvedExport!;
-		} catch {
-			// Block
+		try { (resolvedPath = resolveExports(packageJson.exports, subpath, [ 'require', 'types', 'node' ])[0]!) } catch {
 			cache?.set(cacheKey, false);
+
 			return false;
 		}
 	} else if (!subpath && packageJson.tsconfig) {

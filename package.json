@@ -42,7 +42,7 @@
 		"./preflight": "./dist/preflight.js",
 		"./repl": "./dist/repl.js"
 	},
-	"packageManager": "pnpm@12.12.1",
+	"packageManager": "pnpm@12.13.0",
 	"scripts": {
 		"build": "pnpm type-check && node ./scripts/build/build-js.ts && node ./scripts/build/build-types.ts",
 		"run:import": "node --import ./dist/loader.js",
@@ -64,24 +64,22 @@
 		"node": ">=24.11.1"
 	},
 	"dependencies": {
-		"@d1g1tal/watchr": "^3.5.5",
+		"@d1g1tal/watchr": "^4.0.0",
 		"esbuild": "^0.28.2"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
 		"@types/node": "^26.6.5",
 		"@typescript/native": "npm:typescript@^7.0.2",
-		"@vitest/coverage-v8": "^5.0.3",
+		"@vitest/coverage-v8": "^5.0.4",
 		"c8": "^12.0.0",
 		"eslint": "^10.12.0",
-		"eslint-plugin-jsdoc": "^65.2.4",
-		"execa": "^10.1.0",
-		"fs-fixture": "^2.16.0",
-		"get-node": "^15.0.4",
+		"eslint-plugin-jsdoc": "^65.3.4",
+		"execa": "^10.1.1",
 		"jsonc-parser": "^3.3.1",
 		"mitata": "^1.0.34",
 		"typescript": "npm:@typescript/typescript6@^6.0.2",
-		"typescript-eslint": "^8.71.1",
-		"vitest": "^5.0.3"
+		"typescript-eslint": "^8.71.2",
+		"vitest": "^5.0.4"
 	}
 }

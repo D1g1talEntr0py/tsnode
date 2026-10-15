@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { childEnvironment, createProjectFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -29,21 +30,21 @@ const runResolution = async (
 		parent: request.parent ? pathToFileURL(`${fixture.path}/${request.parent}`).href : undefined,
 	}));
 	const script = `
-import { register } from ${JSON.stringify(registerPath)};
+import { register } from ${Json.serialize(registerPath)};
 const imports = [];
 	const handle = register(${useNamespace ? `{
 	namespace: 'resolution-test',
 	onImport: (url) => imports.push(url),
 }` : `{
 	onImport: (url) => imports.push(url),
-	virtualSources: new Map(${JSON.stringify(Object.entries(options.virtualSources ?? {}))}),
+	virtualSources: new Map(${Json.serialize(Object.entries(options.virtualSources ?? {}))}),
 }`});
-const requests = ${JSON.stringify(resolvedRequests)};
+const requests = ${Json.serialize(resolvedRequests)};
 const results = [];
 try {
   for (const request of requests) {
     try {
-			const module = await ${useScopedImport ? `handle.import(request.specifier, request.parent ?? ${JSON.stringify(defaultParent)})` : 'import(request.specifier)'};
+			const module = await ${useScopedImport ? `handle.import(request.specifier, request.parent ?? ${Json.serialize(defaultParent)})` : 'import(request.specifier)'};
 			results.push({ keys: Object.keys(module).sort(), url: module.url, value: module.value });
     } catch (error) {
       results.push({ code: error?.code, message: error?.message });
@@ -63,7 +64,7 @@ try {
 	], { cwd: fixture.path, env: childEnvironment({ NODE_NO_WARNINGS: '1' }) });
 
 	expect(stderr).toBe('');
-	return JSON.parse(stdout) as {
+	return Json.parse(stdout) as {
 		imports: string[];
 		results: Array<{ code?: string; keys?: string[]; message?: string; url?: string; value?: unknown }>;
 	};
@@ -84,9 +85,9 @@ describe('resolve hook integration', () => {
 	test('prioritizes exact and longest-prefix aliases without weaker-pattern fallback', async () => {
 		const result = await runResolution({
 			'entry.ts': '',
-			'tsconfig.json': JSON.stringify({ compilerOptions: { paths: {
+			'tsconfig.json': Json.serialize({ compilerOptions: { paths: {
 				'@app/*': ['broad/*'], '@app/deep/*': ['narrow/*'], '@app/deep/exact': ['exact.ts'],
-			} } }),
+			} } })!,
 			'exact.ts': 'export const value = "exact";',
 			'broad/deep/exact.ts': 'export const value = "wrong-exact";',
 			'broad/deep/value.ts': 'export const value = "wrong-wildcard";',
@@ -134,12 +135,12 @@ describe('resolve hook integration', () => {
 
 	test('uses tsconfig paths and baseUrl for bare aliases', async () => {
 		const result = await runResolution({
-			'tsconfig.json': JSON.stringify({ compilerOptions: {
+			'tsconfig.json': Json.serialize({ compilerOptions: {
 				target: 'esnext',
 				module: 'esnext',
 				baseUrl: './src',
 				paths: { '@app/*': ['app/*'] },
-			} }),
+			} })!,
 			'entry.ts': '',
 			'src/app/value.ts': 'export const value = "alias";\n',
 		}, [{ specifier: '@app/value' }]);
@@ -149,11 +150,11 @@ describe('resolve hook integration', () => {
 
 	test('only resolves TypeScript from JavaScript parents when allowJs is enabled', async () => {
 		const files = {
-			'tsconfig.json': JSON.stringify({ compilerOptions: {
+			'tsconfig.json': Json.serialize({ compilerOptions: {
 				target: 'esnext',
 				module: 'esnext',
 				allowJs: true,
-			} }),
+			} })!,
 			'entry.ts': '',
 			'allow.js': '',
 			'target.tsx': 'export const value = "allow-js";\n',
@@ -166,9 +167,9 @@ describe('resolve hook integration', () => {
 	test('remaps package exports and does not treat a bare trailing slash as a directory', async () => {
 		const result = await runResolution({
 			'entry.ts': '',
-			'node_modules/remapped/package.json': JSON.stringify({ type: 'module', exports: './index.js' }),
+			'node_modules/remapped/package.json': Json.serialize({ type: 'module', exports: './index.js' })!,
 			'node_modules/remapped/index.ts': 'export const value = "package";\n',
-			'node_modules/trailing/package.json': JSON.stringify({ type: 'module', exports: './index.ts' }),
+			'node_modules/trailing/package.json': Json.serialize({ type: 'module', exports: './index.ts' })!,
 			'node_modules/trailing/index.ts': 'export const value = "trailing";\n',
 		}, [
 			{ specifier: 'remapped' },
@@ -182,13 +183,13 @@ describe('resolve hook integration', () => {
 	test('remaps JavaScript targets in package exports and imports maps', async () => {
 		const result = await runResolution({
 			'entry.ts': '',
-			'node_modules/exports-user/package.json': JSON.stringify({ type: 'module', exports: {
+			'node_modules/exports-user/package.json': Json.serialize({ type: 'module', exports: {
 				'.': './dist/index.js',
 				'./feature': './dist/feature.js',
-			} }),
+			} })!,
 			'node_modules/exports-user/dist/index.ts': 'export const value = "exports-root";\n',
 			'node_modules/exports-user/dist/feature.ts': 'export const value = "exports-feature";\n',
-			'node_modules/imports-user/package.json': JSON.stringify({ type: 'module', imports: { '#feature': './src/feature.js' } }),
+			'node_modules/imports-user/package.json': Json.serialize({ type: 'module', imports: { '#feature': './src/feature.js' } })!,
 			'node_modules/imports-user/entry.ts': '',
 			'node_modules/imports-user/src/feature.ts': 'export const value = "imports-feature";\n',
 		}, [
@@ -202,7 +203,7 @@ describe('resolve hook integration', () => {
 
 	test('preserves package import names with query strings and trailing fragments', async () => {
 		const result = await runResolution({
-			'package.json': JSON.stringify({ type: 'module', imports: { '#feature': './feature.ts' } }),
+			'package.json': Json.serialize({ type: 'module', imports: { '#feature': './feature.ts' } })!,
 			'entry.ts': '',
 			'feature.ts': 'export enum Value { Answer = 42 }; export const value = Value.Answer; export const url = import.meta.url;',
 		}, [{ specifier: '#feature?raw=1#fragment' }]);

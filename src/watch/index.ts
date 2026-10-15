@@ -1,18 +1,17 @@
-import { dirname, isAbsolute, join, relative, matchesGlob } from 'node:path';
+import { isAbsolute, join, relative, matchesGlob, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as osConstants } from 'node:os';
 import { parseArgs } from 'node:util';
-import { Watchr } from '@d1g1tal/watchr';
+import { Watchr, type WatchrEventHandler } from '@d1g1tal/watchr';
 import { lightMagenta, lightGreen, yellow } from '../utils/ansi';
 import { run } from '../run';
 import { noop } from '../utils/constants';
 import { findFirstPositionalIndex, removeArgvFlags } from '../remove-argv-flags';
 import { closeIpcServer, createIpcServer } from '../utils/ipc/server';
 import { clearScreen, log } from './utils';
+import { debugEnabled } from '../utils/debug';
 import type { ChildProcess } from 'node:child_process';
 import type { DependencyMessage, Flags } from '../types';
-
-type WatchEventHandler = NonNullable<ConstructorParameters<typeof Watchr>[2]>;
 
 const flags: Flags = {
 	noCache: { type: Boolean },
@@ -48,18 +47,20 @@ const safeMatchesGlob = (filePath: string, pattern: string) => {
 };
 
 const isDependencyMessage = (data: unknown): data is DependencyMessage => (data !== null && typeof data === 'object' && 'type' in data && data.type === 'dependency' && 'path' in data && typeof data.path === 'string');
-
 const terminatedChildren = new WeakSet<ChildProcess>();
 const terminatingChildren = new WeakMap<ChildProcess, Promise<number | null>>();
 const hasTerminated = (child: ChildProcess) => terminatedChildren.has(child) || child.exitCode !== null || child.signalCode != null;
 
 export const terminateProcess = (child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM', timeout = 5000): Promise<number | null> => {
 	if (hasTerminated(child) || child.pid === undefined) { return Promise.resolve(child.exitCode) }
+
 	const pending = terminatingChildren.get(child);
+
 	if (pending) {
 		if (signal === 'SIGKILL') {
 			try { child.kill(signal) } catch (error) { return Promise.reject(error instanceof Error ? error : new Error(String(error))) }
 		}
+
 		return pending;
 	}
 
@@ -72,23 +73,36 @@ export const terminateProcess = (child: ChildProcess, signal: NodeJS.Signals = '
 		const deadline = setTimeout(() => finish(new Error('Child process did not terminate after SIGKILL')), timeout + 1000);
 		const onExit = () => { terminatedChildren.add(child); finish() };
 		const onError = (error: Error) => { terminatedChildren.add(child); finish(error) };
+
 		finish = (error) => {
 			if (settled) { return }
+
 			settled = true;
+
 			clearTimeout(forceTimer);
 			clearTimeout(deadline);
 			child.removeListener('exit', onExit);
 			child.removeListener('error', onError);
+
 			if (error) { reject(error) } else { resolve(child.exitCode) }
 		};
+
 		child.once('exit', onExit);
 		child.once('error', onError);
-		if (hasTerminated(child) || child.pid === undefined) { finish(); return }
+
+		if (hasTerminated(child) || child.pid === undefined) {
+			finish();
+
+			return;
+		}
 	});
+
 	terminatingChildren.set(child, termination);
+
 	if (!hasTerminated(child)) {
 		try { child.kill(signal) } catch (error) { finish(error instanceof Error ? error : new Error(String(error))) }
 	}
+
 	return termination;
 };
 
@@ -96,7 +110,6 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	const firstPositionalIndex = findFirstPositionalIndex(flags, commandArgv);
 	const scriptPath = commandArgv[firstPositionalIndex];
 	const leadingArgv = firstPositionalIndex === -1 ? commandArgv : commandArgv.slice(0, firstPositionalIndex);
-
 	const { values } = parseArgs({
 		args: leadingArgv,
 		allowPositionals: true,
@@ -113,12 +126,14 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 	if (values.help && firstPositionalIndex === -1) {
 		printWatchHelp();
+
 		return;
 	}
 
 	if (firstPositionalIndex === -1 || scriptPath === undefined) {
 		process.stderr.write('Error: Missing required parameter "script path"\n');
 		process.exitCode = 1;
+
 		return;
 	}
 
@@ -134,9 +149,9 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 		ipc: true
 	};
 
-	// [ scriptPath, ...options.include ] are the initial watch targets. If any of those files are deleted, the watcher will stop watching them.
-	// However, if the script imports other files, those will be watched as well (see onWatchEvent).
+	// Keep explicit targets independent of runtime dependency reconciliation.
 	const watchTargets = [ scriptPath, ...options.include ].map(targetMapper);
+	const isInitialTarget = (dependencyPath: string) => watchTargets.some(target => dependencyPath === target || dependencyPath.startsWith(target.endsWith(sep) ? target : `${target}${sep}`));
 
 	const isIgnoredPath = (targetPath: string) => {
 		const normalizedPath = normalizePath(targetPath);
@@ -169,49 +184,74 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	let rerunQueued = false;
 	let ready = false;
 	const currentRuntimeDependencyPaths = new Set<string>();
-	const watchedRuntimeDependencyPaths = new Set<string>();
+	const dependencyWatchers = new Map<string, Watchr>();
 	const registeringDependencies = new Map<string, Promise<void>>();
 	let reRun: (event?: string, filePath?: string) => void | Promise<void> = noop;
 
 	const server = await createIpcServer().catch((error: unknown) => {
 		process.exitCode = 1;
 		process.stderr.write(`Watch failed: ${String(error)}\n`);
+
 		return undefined;
 	});
+
 	if (!server) { return }
-	const onWatchEvent: WatchEventHandler = (event, _stats, targetPath, targetPathNext) => {
-		const changedPath = targetPathNext ?? targetPath;
+
+	const onWatchEvent: WatchrEventHandler<'all'> = (event) => {
+		if (event.initial) { return }
+		const changedPath = event.type === 'rename' || event.type === 'renameDir' ? event.to : event.path;
 		const relativePath = relative(cwd, changedPath);
 
-		void reRun(event, relativePath.length > 0 && !relativePath.startsWith('..') ? relativePath : changedPath);
+		void reRun(event.type, relativePath.length > 0 && !relativePath.startsWith('..') ? relativePath : changedPath);
 	};
-	const watchrOptions = { ignoreInitial: true, ignore: isIgnoredPath, recursive: true, debounce: 100 };
+	const watchrOptions = {
+		emitInitial: false,
+		ignore: isIgnoredPath,
+		recursive: true,
+		handlers: {
+			all: onWatchEvent,
+			error: (error: Error) => { void fail(error) }
+		}
+	};
+
 	let watcher: Watchr;
-	try { watcher = new Watchr(watchTargets, watchrOptions, onWatchEvent) } catch (error) {
+
+	try { watcher = new Watchr(watchTargets, watchrOptions) } catch (error) {
 		await closeIpcServer(server);
+
 		process.exitCode = 1;
 		process.stderr.write(`Watch failed: ${String(error)}\n`);
+
 		return;
 	}
+
 	let shutdownPromise: Promise<void> | undefined;
 	let signalExitRequested = false;
 	const onStdin = () => { void reRun('Return key') };
 	const shutdown = (signal: NodeJS.Signals = 'SIGTERM') => {
 		exiting = true;
+
 		if (shutdownPromise) {
 			if (runProcess && !hasTerminated(runProcess)) { void terminateProcess(runProcess, 'SIGKILL').catch(noop) }
+
 			return shutdownPromise;
 		}
+
 		process.stdin.removeListener('data', onStdin);
 		process.stdin.pause();
 		watcher.close();
-		shutdownPromise = Promise.all([
-			runProcess ? terminateProcess(runProcess, signal) : Promise.resolve(),
-			closeIpcServer(server)
-		]).then(noop).finally(() => {
-			process.removeListener('SIGINT', relaySignal);
-			process.removeListener('SIGTERM', relaySignal);
-		});
+
+		for (const dependencyWatcher of dependencyWatchers.values()) { dependencyWatcher.close() }
+
+		dependencyWatchers.clear();
+
+		shutdownPromise = Promise.all([ runProcess ? terminateProcess(runProcess, signal) : Promise.resolve(), closeIpcServer(server) ])
+			.then(noop)
+			.finally(() => {
+				process.removeListener('SIGINT', relaySignal);
+				process.removeListener('SIGTERM', relaySignal);
+			});
+
 		return shutdownPromise;
 	};
 	const fail = async (error: unknown) => {
@@ -225,41 +265,59 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	const relaySignal = (signal: NodeJS.Signals) => {
 		const wasRunning = runProcess !== undefined && !hasTerminated(runProcess);
 		const shuttingDown = shutdown(signal);
+
 		if (signalExitRequested) { return }
+
 		signalExitRequested = true;
+
 		void shuttingDown.then(() => process.exit(runProcess ? runProcess.exitCode ?? (wasRunning && runProcess.signalCode ? 128 + osConstants.signals[runProcess.signalCode] : 0) : osConstants.signals[signal]), (error: unknown) => {
 			process.stderr.write(`Watch cleanup failed: ${String(error)}\n`);
 			process.exit(1);
 		});
 	};
+
 	process.on('SIGINT', relaySignal);
 	process.on('SIGTERM', relaySignal);
-	watcher.on('error', (error: unknown) => { void fail(error) });
 	server.on('error', (error: unknown) => { void fail(error) });
 
 	server.on('data', (data: unknown) => {
 		if (exiting) { return }
+
 		if (data && typeof data === 'object' && 'type' in data && data.type === 'dependency-overflow') {
 			void fail(new Error('IPC dependency queue overflow; watch coverage is incomplete'));
 			return;
 		}
+
 		// Collect run-time dependencies to watch
 		if (isDependencyMessage(data)) {
 			let dependencyPath: string;
-			try { dependencyPath = data.path.startsWith('file:') ? fileURLToPath(data.path) : data.path } catch (error) { void fail(error); return }
+			try { dependencyPath = data.path.startsWith('file:') ? fileURLToPath(data.path) : data.path } catch (error) { return void fail(error) }
 
 			if (isAbsolute(dependencyPath)) {
-				if (!isIgnoredPath(dependencyPath)) {
-					currentRuntimeDependencyPaths.add(dependencyPath);
-				}
+				dependencyPath = resolve(dependencyPath);
+				if (isIgnoredPath(dependencyPath) || isInitialTarget(dependencyPath)) { return }
+				currentRuntimeDependencyPaths.add(dependencyPath);
 
-				if (!watchedRuntimeDependencyPaths.has(dependencyPath) && !registeringDependencies.has(dependencyPath) && currentRuntimeDependencyPaths.has(dependencyPath)) {
-					const registration = watcher.watchPath(dependencyPath, watchrOptions, onWatchEvent).then(() => {
-						if (!exiting) { watchedRuntimeDependencyPaths.add(dependencyPath) }
-					}, (error: unknown) => fail(new Error(`Cannot watch dependency ${dependencyPath}: ${String(error)}`))).finally(() => {
+				// Register a new watcher for this dependency if it is not already being watched or registered
+				if (!dependencyWatchers.has(dependencyPath) && !registeringDependencies.has(dependencyPath)) {
+					const registration = (async () => {
+						try {
+							const dependencyWatcher = new Watchr(dependencyPath, watchrOptions);
+							dependencyWatchers.set(dependencyPath, dependencyWatcher);
+
+							await dependencyWatcher.start();
+
+							if (!exiting && debugEnabled) { log('Watching dependency', dependencyPath) }
+						} catch (error) {
+							await fail(new Error(`Cannot watch dependency ${dependencyPath}: ${String(error)}`));
+						}
+					})().finally(() => {
 						registeringDependencies.delete(dependencyPath);
 					});
+
 					registeringDependencies.set(dependencyPath, registration);
+				} else if (!registeringDependencies.has(dependencyPath) && debugEnabled) {
+					log('Watching dependency', dependencyPath);
 				}
 			}
 		}
@@ -267,10 +325,12 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 
 	const reconcileRuntimeDependencies = async () => {
 		await Promise.all(registeringDependencies.values());
-		for (const dependencyPath of watchedRuntimeDependencyPaths) {
+
+		// Remove any watched runtime dependencies that are no longer current
+		for (const [ dependencyPath, dependencyWatcher ] of dependencyWatchers) {
 			if (!currentRuntimeDependencyPaths.has(dependencyPath)) {
-				watcher.watchersClose(dirname(dependencyPath), dependencyPath);
-				watchedRuntimeDependencyPaths.delete(dependencyPath);
+				dependencyWatcher.close();
+				dependencyWatchers.delete(dependencyPath);
 			}
 		}
 
@@ -283,9 +343,15 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 		const child = run(rawArgvFlags, options);
 		child.once('exit', () => terminatedChildren.add(child));
 		child.once('error', (error) => { terminatedChildren.add(child); void fail(error) });
+
 		return child;
 	};
 
+	/**
+	 * Re-run the process on file changes or manual triggers
+	 * @param event The type of file system event that triggered the re-run
+	 * @param filePath The path of the file that triggered the re-run, if applicable
+	 */
 	reRun = async (event?: string, filePath?: string) => {
 		const reason = event ? `${lightMagenta(event)}${filePath ? ` in ${lightGreen(`./${filePath}`)}` : ''}` : '';
 
@@ -328,23 +394,24 @@ export const runWatchCommand = async (commandArgv = process.argv.slice(3)) => {
 	};
 
 	try {
-		await watcher.readyLock;
+		await watcher.start();
+
 		if (exiting) { return }
+
 		ready = true;
 		await reRun();
 	} catch (error) {
 		await fail(error);
 	}
+
 	if (exiting) { return }
 
 	/**
-	 * Ideally, we can get a list of files loaded from the run above
-	 * and only watch those files, but it's not possible to detect
-	 * the full dependency-tree at run-time because they can be hidden
-	 * in a if-condition/async-delay.
+	 * On "Return" key
+	 * Ideally, we can get a list of files loaded from the run above and only watch those files, but it's not possible to detect
+	 * the full dependency-tree at run-time because they can be hidden in a if-condition/async-delay.
 	 *
-	 * As an alternative, we watch cwd and all run-time dependencies
+	 * Watch explicit targets and dependencies reported by the child instead of the entire cwd.
 	 */
-	// On "Return" key
 	process.stdin.on('data', onStdin);
 };

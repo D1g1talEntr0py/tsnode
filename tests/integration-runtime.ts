@@ -4,6 +4,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { childEnvironment, createProjectFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -68,11 +69,11 @@ describe('runtime integration', () => {
 		});
 		const entryPath = path.join(fixture.path, 'entry.ts');
 		const result = await runModule(`
-			import { runInProcess } from ${JSON.stringify(runtimePath('run-in-process'))};
-			await runInProcess(${JSON.stringify([entryPath, 'one', 'two'])});
+			import { runInProcess } from ${Json.serialize(runtimePath('run-in-process'))};
+			await runInProcess(${Json.serialize([entryPath, 'one', 'two'])!});
 		`, fixture.path);
 
-		expect(JSON.parse(result.stdout)).toEqual({ ppid: process.pid, argv: [ entryPath, 'one', 'two' ] });
+		expect(Json.parse(result.stdout)).toEqual({ ppid: process.pid, argv: [ entryPath, 'one', 'two' ] });
 		expect(result.stderr).toBe('');
 	});
 
@@ -84,19 +85,19 @@ describe('runtime integration', () => {
 		const relativeLoaderPath = path.relative(fixture.path, loaderPath);
 		const relativeImport = relativeLoaderPath.startsWith('.') ? relativeLoaderPath : `./${relativeLoaderPath}`;
 		const result = await runModule(`
-			process.execArgv = ['--import', ${JSON.stringify(relativeImport)}];
-			import { runInProcess } from ${JSON.stringify(runtimePath('run-in-process'))};
+			process.execArgv = ['--import', ${Json.serialize(relativeImport)}];
+			import { runInProcess } from ${Json.serialize(runtimePath('run-in-process'))};
 			await runInProcess(['entry.ts']);
 		`, fixture.path);
 
-		expect(JSON.parse(result.stdout)).toEqual([ '--import', relativeImport ]);
+		expect(Json.parse(result.stdout)).toEqual([ '--import', relativeImport ]);
 		expect(result.stderr).toBe('');
 	});
 
 	test('runs eval code through its in-process runner', async () => {
 		await using fixture = await createProjectFixture({ 'entry.ts': '' });
 		const result = await runModule(`
-			import { runEvalInProcess } from ${JSON.stringify(runtimePath('run-eval-in-process'))};
+			import { runEvalInProcess } from ${Json.serialize(runtimePath('run-eval-in-process'))};
 			await runEvalInProcess('console.log(JSON.stringify(process.argv.slice(1)));', [ 'eval-arg' ]);
 		`, fixture.path);
 
@@ -127,7 +128,7 @@ describe('runtime integration', () => {
 			'--import', sourceResolveHookPath,
 			'--input-type=module',
 			'--eval', `
-				import ${JSON.stringify(runtimePath('repl'))};
+				import ${Json.serialize(runtimePath('repl'))};
 				import { start } from 'node:repl';
 				start({ prompt: '> ' });
 			`,
@@ -193,6 +194,6 @@ describe('runtime integration', () => {
 			stdio: ['ignore', 'pipe', 'pipe'],
 		}));
 		expect(result.exitCode, result.stderr).toBe(0);
-		expect(JSON.parse(result.stdout)).toEqual({ before: { total: 2, handler: 1, unrelated: 0, listed: 2 }, removed: 0, specific: 0 });
+		expect(Json.parse(result.stdout)).toEqual({ before: { total: 2, handler: 1, unrelated: 0, listed: 2 }, removed: 0, specific: 0 });
 	});
 });

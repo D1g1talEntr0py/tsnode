@@ -1,12 +1,13 @@
 import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
+import { Json } from '../../../src/utils/json';
 
 export type RunResult = {
 
 	/** Parent-measured wall time: spawn -> exit. */
 	wallMs: number;
 
-	/** Peak RSS in kilobytes (Node's resourceUsage().maxRSS). */
+	/** Exit-time child peak RSS in KiB; /proc VmHWM on Linux, maxRSS elsewhere. Excludes descendants. */
 	maxRssKb: number;
 
 	/** Time to first module evaluation ≈ bootstrap + graph load/transform. */
@@ -29,7 +30,7 @@ const parseBenchLine = (stdout: string): BenchLine | undefined => {
 	if (!line) {
 		return;
 	}
-	return JSON.parse(line.slice('__BENCH__'.length)) as BenchLine;
+	return Json.parse(line.slice('__BENCH__'.length)) as BenchLine;
 };
 
 export const runOnce = async (

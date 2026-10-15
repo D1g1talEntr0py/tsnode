@@ -4,6 +4,7 @@ import { register, registerScoped } from '../src/api/register';
 import * as resolver from '../src/hook/resolve';
 import * as loader from '../src/hook/load';
 import type { NamespacedUnregister } from '../src/types';
+import { Json } from '../src/utils/json';
 
 test('register returns an unscoped handle when no namespace is provided', () => {
 	const handle = register({ tsconfig: false });
@@ -91,7 +92,7 @@ test('dispatches directly among 100 scopes and preserves partial downstream cont
 		const hooks = nativeRegistration.mock.calls[0]![0];
 		const context = { conditions: ['node', 'custom'], importAttributes: { custom: 'attribute' }, parentURL: 'file:///parent.ts' };
 		const nextResolve = vi.fn().mockReturnValue({ url: 'file:///entry.ts', format: 'module', shortCircuit: true });
-		hooks.resolve!(`tsnode://${JSON.stringify({ namespace: 'scope-99', specifier: './entry.ts', parentURL: context.parentURL })}`, context, nextResolve);
+		hooks.resolve!(`tsnode://${Json.serialize({ namespace: 'scope-99', specifier: './entry.ts', parentURL: context.parentURL })!}`, context, nextResolve);
 		expect(resolvedScopes).toEqual(['scope-99']);
 		expect(nextResolve.mock.calls[0]![1]).toEqual({ ...context, parentURL: 'file:///updated.ts' });
 		hooks.resolve!('./child.ts', { ...context, parentURL: 'file:///parent.ts?tsnode-namespace=scope-0' }, nextResolve);

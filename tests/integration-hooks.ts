@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { createProjectFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -18,7 +19,7 @@ describe('native hook integration', () => {
 		const entryPath = fileURLToPath(new URL('entry.ts', pathToFileURL(`${fixture.path}/`).href));
 		const entryUrl = pathToFileURL(entryPath).href;
 		const registerPath = pathToFileURL(`${projectRoot}/src/api/register.ts`).href;
-		const script = `import { register } from ${JSON.stringify(registerPath)};\nconst handle = register({ namespace: 'probe', tsconfig: false });\ntry { console.log(JSON.stringify(await handle.import(${JSON.stringify(entryUrl)}, ${JSON.stringify(entryUrl)}))); } finally { handle.unregister(); }`;
+		const script = `import { register } from ${Json.serialize(registerPath)};\nconst handle = register({ namespace: 'probe', tsconfig: false });\ntry { console.log(JSON.stringify(await handle.import(${Json.serialize(entryUrl)}, ${Json.serialize(entryUrl)}))); } finally { handle.unregister(); }`;
 		const { stdout } = await execFileAsync(process.execPath, [
 			'--experimental-strip-types',
 			'--import', sourceResolveHookPath,
@@ -26,6 +27,6 @@ describe('native hook integration', () => {
 			'--eval', script,
 		], { cwd: fixture.path });
 
-		expect(JSON.parse(stdout)).toMatchObject({ answer: 42 });
+		expect(Json.parse(stdout)).toMatchObject({ answer: 42 });
 	});
 });

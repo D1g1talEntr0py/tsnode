@@ -5,6 +5,7 @@ import cache from './cache';
 import { cacheConfig, patchSourcefileOption, patchTransformResult } from './get-esbuild-options';
 import type { CachedTransformOptions, Transformed } from '../../types';
 import type { TransformOptions } from 'esbuild';
+import { Json } from '../json';
 
 type EsbuildModule = typeof import('esbuild');
 
@@ -88,8 +89,8 @@ let defaultOptionsIdentity: string | undefined;
 const getCustomOptionsIdentity = (options: TransformOptions) => {
 	let cacheable = true;
 	const expressionIdentity = (value: RegExp | undefined) => value instanceof RegExp ? [value.source, value.flags] : undefined;
-	const identity = JSON.stringify([ options, Object.keys(options), expressionIdentity(options.mangleProps), expressionIdentity(options.reserveProps) ], function (this: Record<string, unknown>, key: string, value: unknown) {
-		const original = this[key];
+	const identity = Json.serialize([ options, Object.keys(options), expressionIdentity(options.mangleProps), expressionIdentity(options.reserveProps) ], function (this: unknown, key: string, value: unknown) {
+		const original: unknown = (this as Record<string, unknown>)[key];
 
 		if (typeof original === 'function' || typeof original === 'symbol') { cacheable = false }
 
@@ -117,9 +118,9 @@ export const transformSync = (code: string, filePath: string, extendOptions?: Ca
 	}
 
 	const customOptions = Object.keys(esbuildExtendOptions).some(option => option !== 'sourcefile' && option !== 'tsconfigRaw') || (!snapshot && esbuildOptions.tsconfigRaw !== undefined);
-	const optionsIdentity = customOptions ? getCustomOptionsIdentity(esbuildOptions) : defaultOptionsIdentity ??= JSON.stringify({ ...cacheConfig, format: 'esm' });
-	const compilerIdentity = snapshot && !customOptions ? snapshot.identity ??= JSON.stringify([optionsIdentity, tsconfigHash ?? '', snapshot.serialized, getEsbuildVersionSalt()]) : JSON.stringify([optionsIdentity, tsconfigHash ?? '', snapshot?.serialized ?? JSON.stringify(esbuildOptions.tsconfigRaw) ?? '', getEsbuildVersionSalt()]);
-	const identity = `[${JSON.stringify(code)},${JSON.stringify({ filePath, sourcefile: esbuildOptions.sourcefile, originalSourcefile: originalSourcefile === esbuildOptions.sourcefile ? undefined : originalSourcefile })},${compilerIdentity}]`;
+	const optionsIdentity = customOptions ? getCustomOptionsIdentity(esbuildOptions) : defaultOptionsIdentity ??= Json.serialize({ ...cacheConfig, format: 'esm' });
+	const compilerIdentity = snapshot && !customOptions ? snapshot.identity ??= Json.serialize([optionsIdentity, tsconfigHash ?? '', snapshot.serialized, getEsbuildVersionSalt()]) : Json.serialize([optionsIdentity, tsconfigHash ?? '', snapshot?.serialized ?? Json.serialize(esbuildOptions.tsconfigRaw) ?? '', getEsbuildVersionSalt()]);
+	const identity = `[${Json.serialize(code)},${Json.serialize({ filePath, sourcefile: esbuildOptions.sourcefile, originalSourcefile: originalSourcefile === esbuildOptions.sourcefile ? undefined : originalSourcefile })},${compilerIdentity}]`;
 	const hash = `v3-${bucket(code)}-${bucket(filePath)}`;
 	let transformed = optionsIdentity === undefined ? undefined : cache.get(hash, identity);
 

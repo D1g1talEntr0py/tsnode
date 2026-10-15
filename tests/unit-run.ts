@@ -10,6 +10,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { run } from '../src/run';
+import { Json } from '../src/utils/json';
 
 describe('run', () => {
 	afterEach(() => {
@@ -96,7 +97,7 @@ describe('run', () => {
 	test('adds an IPC channel when run is called from a spawned process with IPC', async () => {
 		const sourceResolveHookPath = path.resolve('tests/utils/source-resolve-hook.ts');
 		const driver = `
-			const { run } = await import(${JSON.stringify(path.resolve('src/run.ts'))});
+			const { run } = await import(${Json.serialize(path.resolve('src/run.ts'))});
 			const child = run(['-e', 'process.send?.("child-message")'], { signalRelay: false });
 			child.on('message', message => process.send?.(message));
 			child.on('close', code => process.exit(code ?? 1));

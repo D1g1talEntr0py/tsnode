@@ -1,12 +1,23 @@
 import { describe, expect, test } from 'vitest';
-import { baseConfig, patchOptions } from '../src/utils/transform/get-esbuild-options';
+import { baseConfig, patchOptions, patchTransformResult } from '../src/utils/transform/get-esbuild-options';
 import type { TransformResult } from 'esbuild';
+import { Json } from '../src/utils/json';
 
 const transformResult = (map: string): TransformResult => ({
 	code: 'export {}', map, warnings: [], mangleCache: undefined, legalComments: undefined,
 });
 
 describe('transform options', () => {
+	test.each([
+		[undefined, 'input'],
+		['input.js', undefined],
+	])('leaves source maps unchanged for missing filenames (%s, %s)', (sourcefile, originalSourcefile) => {
+		const map = Json.serialize({ file: 'undefined', sources: ['input.js'] })!;
+		const result = patchTransformResult(transformResult(map), sourcefile, originalSourcefile);
+
+		expect(result.map).toEqual(Json.parse(map));
+	});
+
 	describe('baseConfig', () => {
 		test('targets the running Node version with the default loader', () => {
 			expect(baseConfig).toEqual({
@@ -20,7 +31,7 @@ describe('transform options', () => {
 		test('leaves source maps untouched when no sourcefile is provided', () => {
 			const options = {} as Parameters<typeof patchOptions>[0];
 			const patchResult = patchOptions(options);
-			const result = patchResult(transformResult(JSON.stringify({ file: 'index.js' })));
+			const result = patchResult(transformResult(Json.serialize({ file: 'index.js' })!));
 
 			expect(result.map?.file).toBe('index.js');
 		});
@@ -28,7 +39,7 @@ describe('transform options', () => {
 		test('appends a js extension for extensionless sourcefiles', () => {
 			const options = { sourcefile: 'input' } as Parameters<typeof patchOptions>[0];
 			const patchResult = patchOptions(options);
-			const result = patchResult(transformResult(JSON.stringify({ file: 'input.js', sources: ['input.js'] })));
+			const result = patchResult(transformResult(Json.serialize({ file: 'input.js', sources: ['input.js'] })!));
 
 			expect(options.sourcefile).toBe('input.js');
 			expect(result.map?.file).toBe('input');
@@ -38,7 +49,7 @@ describe('transform options', () => {
 		test('keeps extensionful sourcefiles unchanged', () => {
 			const options = { sourcefile: 'src/file.ts' } as Parameters<typeof patchOptions>[0];
 			const patchResult = patchOptions(options);
-			const result = patchResult(transformResult(JSON.stringify({ file: 'src/file.ts', sources: ['src/file.ts'] })));
+			const result = patchResult(transformResult(Json.serialize({ file: 'src/file.ts', sources: ['src/file.ts'] })!));
 
 			expect(options.sourcefile).toBe('src/file.ts');
 			expect(result.map?.file).toBe('src/file.ts');
@@ -48,7 +59,7 @@ describe('transform options', () => {
 		test('keeps extensionful sourcefiles with query strings unchanged', () => {
 			const options = { sourcefile: 'src/file.ts?cache=1' } as Parameters<typeof patchOptions>[0];
 			const patchResult = patchOptions(options);
-			const result = patchResult(transformResult(JSON.stringify({ file: 'src/file.ts?cache=1', sources: ['src/file.ts?cache=1'] })));
+			const result = patchResult(transformResult(Json.serialize({ file: 'src/file.ts?cache=1', sources: ['src/file.ts?cache=1'] })!));
 
 			expect(options.sourcefile).toBe('src/file.ts?cache=1');
 			expect(result.map?.file).toBe('src/file.ts?cache=1');

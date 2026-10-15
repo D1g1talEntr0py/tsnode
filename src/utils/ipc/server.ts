@@ -2,6 +2,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { rmSync } from 'node:fs';
 import { ensurePrivateDirectory } from '../temporary-directory';
 import { isWindows, getPipePath } from './get-pipe-path';
+import { Json } from '../json';
 
 type OnMessage = (message: Buffer) => void;
 
@@ -13,7 +14,7 @@ const maxMessageLength = 10 * 1024 * 1024;
  * @param onMessage Callback invoked with each complete message.
  * @param onInvalidLength Callback invoked when an invalid message length is encountered.
  */
-const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
+export const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
 	const chunks: Buffer[] = [];
 	let totalLength = 0;
 
@@ -45,6 +46,9 @@ const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
 	 * @returns The length of the next message as a 32-bit big-endian integer.
 	 */
 	const readLength = () => {
+		const firstChunk = chunks[0];
+		if (firstChunk && firstChunk.length >= 4) { return firstChunk.readInt32BE(0) }
+
 		const prefix = Buffer.alloc(4);
 		let written = 0;
 		for (const chunk of chunks) {
@@ -71,6 +75,14 @@ const bufferData = (onMessage: OnMessage, onInvalidLength: () => void) => {
 			if (totalLength < 4 + messageLength) { break }
 
 			consume(4);
+			const firstChunk = chunks[0];
+			if (firstChunk && firstChunk.length >= messageLength) {
+				const message = firstChunk.subarray(0, messageLength);
+				consume(messageLength);
+				onMessage(message);
+				continue;
+			}
+
 			const message = Buffer.allocUnsafe(messageLength);
 			let offset = 0;
 			while (offset < messageLength) {
@@ -109,7 +121,7 @@ export const createIpcServer = async (pipePath = getPipePath(process.pid)) => {
 		socket.on('error', () => socket.destroy());
 		socket.on('data', bufferData((message: Buffer) => {
 			try {
-				const parsedMessage: unknown = JSON.parse(message.toString());
+				const parsedMessage: unknown = Json.parse(message.toString());
 				server.emit('data', parsedMessage);
 			} catch { /* Ignore malformed frames and keep the connection available for later messages. */ }
 		}, () => socket.destroy()));

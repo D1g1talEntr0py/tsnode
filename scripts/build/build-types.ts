@@ -3,12 +3,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { relative, join, dirname } from 'node:path';
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+const { Json } = await import(new URL('../../src/utils/json.ts', import.meta.url).href) as typeof import('../../src/utils/json');
 
 const projectRoot = cwd();
 const packageJsonPath = join(projectRoot, 'package.json');
 const temporaryDeclarationDirectory = join(projectRoot, '.types-build');
 const isRecord = (value: unknown): value is Record<string, unknown> => !Array.isArray(value) && typeof value === 'object' && value !== null;
-const parsedPackageJson: unknown = JSON.parse(await readFile(packageJsonPath, 'utf8'));
+const parsedPackageJson: unknown = Json.parse(await readFile(packageJsonPath, 'utf8'));
 if (!isRecord(parsedPackageJson)) { throw new TypeError('package.json must contain an object') }
 const packageJson = parsedPackageJson;
 const typeEntries = new Map<string, string>();

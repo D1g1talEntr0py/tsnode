@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { fileUrlPrefix } from '../utils/path-utils';
 import type { DynamicImport, ModuleNamespace, ScopedImport } from '../types';
+import { Json } from '../utils/json';
 
 // Keep this indirect so bundlers don't try to statically analyze tsnode:// imports.
 const nativeEval = globalThis[('ev' + 'al') as 'eval'];
@@ -13,5 +14,5 @@ export const createScopedImport = (namespace: string): ScopedImport => <TModule 
 
 	const parentURL = parent.startsWith(fileUrlPrefix) ? parent : pathToFileURL(parent).toString();
 
-	return dynamicImport<TModule>(`tsnode://${JSON.stringify({ specifier, parentURL, namespace })}`);
+	return dynamicImport<TModule>(`tsnode://${Json.serialize({ specifier, parentURL, namespace })}`);
 };

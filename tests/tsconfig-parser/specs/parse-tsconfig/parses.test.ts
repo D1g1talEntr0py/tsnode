@@ -3,6 +3,7 @@ import { createFixture } from '../../utils/fixture';
 import { createTsconfigJson } from '../../utils/fixture-helpers';
 import { getTscTsconfig, typescriptVersions } from '../../utils/typescript-helpers';
 import { parseTsconfig } from '../../../../src/utils/tsconfig-parser';
+import { Json } from '../../../../src/utils/json';
 
 describe.each(typescriptVersions)('parses tsconfig (TypeScript %i)', (version) => {
 	describe('errors', () => {
@@ -695,7 +696,7 @@ describe.each(typescriptVersions)('parses tsconfig (TypeScript %i)', (version) =
 		test.each(['Node', 'NODE10'])('normalizes moduleResolution %s', async (moduleResolution) => {
 			await using fixture = await createFixture({
 				'file.ts': '',
-				'tsconfig.json': JSON.stringify({ compilerOptions: { moduleResolution } })
+				'tsconfig.json': Json.serialize({ compilerOptions: { moduleResolution } })!
 			});
 
 			const parsedTsconfig = parseTsconfig(fixture.getPath('tsconfig.json'), { typeScriptVersion: version });
@@ -722,7 +723,7 @@ describe.each(typescriptVersions)('parses tsconfig (TypeScript %i)', (version) =
 		test.runIf(version === 7)('are dropped', async () => {
 			await using fixture = await createFixture({
 				'file.ts': '',
-				'tsconfig.json': JSON.stringify({ compilerOptions: removedOptions })
+				'tsconfig.json': Json.serialize({ compilerOptions: removedOptions })!
 			});
 
 			const parsedTsconfig = parseTsconfig(fixture.getPath('tsconfig.json'), { typeScriptVersion: version });
@@ -736,7 +737,7 @@ describe.each(typescriptVersions)('parses tsconfig (TypeScript %i)', (version) =
 		test.runIf(version === 6)('are kept and normalized', async () => {
 			await using fixture = await createFixture({
 				'file.ts': '',
-				'tsconfig.json': JSON.stringify({ compilerOptions: removedOptions })
+				'tsconfig.json': Json.serialize({ compilerOptions: removedOptions })!
 			});
 
 			const parsedTsconfig = parseTsconfig(fixture.getPath('tsconfig.json'), { typeScriptVersion: version });

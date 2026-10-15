@@ -1,11 +1,11 @@
 import path from 'node:path';
-import type { CompilerOptions, TypeScriptConfig, TypeScriptOptions, Cache, ParseTsconfigOptions } from '../types';
 import { normalizeRelativePath } from '../utils/normalize-relative-path';
 import { toPosixPath } from '../utils/to-posix-path';
 import { readJsonc } from '../utils/read-jsonc';
 import { implicitBaseUrlSymbol, configDirPlaceholder } from '../utils/constants';
-import { getTypeScriptSemantics, type TypeScriptSemanticsConfiguration } from '../utils/typescript-semantics';
 import { resolveExtendsPath } from './resolve-extends-path';
+import { getTypeScriptSemantics, type TypeScriptSemanticsConfiguration } from '../utils/typescript-semantics';
+import type { CompilerOptions, TypeScriptConfig, TypeScriptOptions, Cache, ParseTsconfigOptions } from '../types';
 
 const pathRelative = (from: string, to: string) => normalizeRelativePath(path.relative(from, to));
 
@@ -47,7 +47,14 @@ const prefixPattern = (fromDirectoryPath: string, extendsDirectoryPath: string, 
 	return relativeDir ? toPosixPath(`${relativeDir}/${pattern.startsWith('./') ? pattern.slice(2) : pattern}`) : pattern;
 };
 
-const resolveExtends = (extendsPath: string, fromDirectoryPath: string, circularExtendsTracker: Set<string>, semantics: TypeScriptSemanticsConfiguration, cache?: Cache) => {
+const copyConfig = (config: TypeScriptOptions): TypeScriptOptions => {
+	const copy = { ...config };
+	if (config.compilerOptions) { copy.compilerOptions = { ...config.compilerOptions } }
+	if (config.watchOptions) { copy.watchOptions = { ...config.watchOptions } }
+	return copy;
+};
+
+const resolveExtends = (extendsPath: string, fromDirectoryPath: string, circularExtendsTracker: Set<string>, semantics: TypeScriptSemanticsConfiguration, parsedConfigs: Map<string, TypeScriptOptions>, cache?: Cache) => {
 	const resolvedExtendsPath = resolveExtendsPath(extendsPath, fromDirectoryPath, cache);
 
 	if (!resolvedExtendsPath) { throw new Error(`File '${extendsPath}' not found.`) }
@@ -59,7 +66,7 @@ const resolveExtends = (extendsPath: string, fromDirectoryPath: string, circular
 	circularExtendsTracker.add(resolvedExtendsPath);
 
 	const extendsDirectoryPath = path.dirname(resolvedExtendsPath);
-	const extendsConfig = _parseTsconfig(resolvedExtendsPath, semantics, cache, circularExtendsTracker, true);
+	const extendsConfig = _parseTsconfig(resolvedExtendsPath, semantics, cache, circularExtendsTracker, true, parsedConfigs);
 	delete extendsConfig.references;
 
 	const { compilerOptions } = extendsConfig;
@@ -105,11 +112,7 @@ const resolveExtends = (extendsPath: string, fromDirectoryPath: string, circular
 	for (const property of filesProperties) {
 		const filesList = extendsConfig[property];
 		if (filesList) {
-			extendsConfig[property] = filesList.map((file) => {
-				if (file.startsWith(configDirPlaceholder)) { return file }
-
-				return prefixPattern(fromDirectoryPath, extendsDirectoryPath, file);
-			});
+			extendsConfig[property] = filesList.map((file) => file.startsWith(configDirPlaceholder) ? file : prefixPattern(fromDirectoryPath, extendsDirectoryPath, file));
 		}
 	}
 
@@ -130,19 +133,13 @@ const outputFields = [
  * @param cache Optional cache for file system reads.
  * @param circularExtendsTracker Tracks circular references in extends.
  * @param isExtendedConfig Indicates if the config is an extended config.
+ * @param parsedConfigs Completed ancestors shared within this parse invocation.
  * @returns The resolved and merged tsconfig object.
  */
-const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConfiguration, cache?: Cache, circularExtendsTracker = new Set<string>(), isExtendedConfig = false): TypeScriptOptions => {
-	/**
-	 * Decided not to cache the TsConfigJsonResolved object because it's
-	 * mutable.
-	 *
-	 * Note how `resolveExtends` can call `parseTsconfig` recursively
-	 * and actually mutates the object. It can also be mutated in
-	 * user-land.
-	 *
-	 * By only caching fs results, we can avoid serving mutated objects
-	 */
+const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConfiguration, cache?: Cache, circularExtendsTracker = new Set<string>(), isExtendedConfig = false, parsedConfigs = new Map<string, TypeScriptOptions>()): TypeScriptOptions => {
+	const parsed = parsedConfigs.get(tsconfigPath);
+	if (parsed) { return copyConfig(parsed) }
+
 	let config: TypeScriptConfig;
 	try {
 		config = readJsonc(tsconfigPath, cache) as TypeScriptConfig;
@@ -168,7 +165,7 @@ const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConf
 		delete config.extends;
 
 		for (const extendsPath of extendsPathList.toReversed()) {
-			const extendsConfig = resolveExtends(extendsPath, directoryPath, new Set(circularExtendsTracker), semantics, cache);
+			const extendsConfig = resolveExtends(extendsPath, directoryPath, new Set(circularExtendsTracker), semantics, parsedConfigs, cache);
 			const merged = {
 				...extendsConfig,
 				...config,
@@ -264,6 +261,7 @@ const _parseTsconfig = (tsconfigPath: string, semantics: TypeScriptSemanticsConf
 		}
 	}
 
+	if (isExtendedConfig) { parsedConfigs.set(tsconfigPath, copyConfig(config)) }
 	return config;
 };
 

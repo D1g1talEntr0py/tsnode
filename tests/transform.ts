@@ -1,11 +1,10 @@
 import { describe, test, expect } from 'vitest';
-import outdent from './utils/outdent';
 import { transformSync } from '../src/utils/transform/index';
 
 const base64Module = (code: string) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
 
 const fixtures = {
-	ts: outdent`
+	ts: `
 	const __filename = 'filename';
 	const __dirname = 'dirname';
 	try {

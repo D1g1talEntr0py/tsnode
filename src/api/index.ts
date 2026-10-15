@@ -2,6 +2,7 @@ import { register, registerScoped } from './register';
 import { resolve } from 'node:path';
 import { getTsconfigCacheKey } from '../utils/tsconfig';
 import type { ModuleNamespace, ModuleImport, TsImportOptions, NamespacedUnregister } from '../types';
+import { Json } from '../utils/json';
 
 let nextImportNamespace = 0;
 let nextOptionIdentity = 0;
@@ -9,16 +10,9 @@ const optionIdentities = new WeakMap<object, number>();
 const scopeCacheLimit = 64;
 type ImportScope = { key: string; handle: NamespacedUnregister; pending: number; successful: boolean };
 const importScopes = new Map<string, ImportScope>();
-const retainedScopes = new Set<ImportScope>();
+const retainedScopes = new Map<string, ImportScope>();
 
-const findImportScope = (key: string) => {
-	const cached = importScopes.get(key);
-	if (cached) { return cached }
-	for (const scope of retainedScopes) {
-		if (scope.key === key) { return scope }
-	}
-	return undefined;
-};
+const findImportScope = (key: string) => importScopes.get(key) ?? retainedScopes.get(key);
 
 const getOptionIdentity = (option: object | undefined) => {
 	if (!option) { return 0 }
@@ -30,12 +24,12 @@ const getOptionIdentity = (option: object | undefined) => {
 	return identity;
 };
 
-const finishImport = (key: string, scope: ImportScope, successful: boolean) => {
+const finishImport = (scope: ImportScope, successful: boolean) => {
 	scope.pending -= 1;
 	scope.successful ||= successful;
-	if (successful) { retainedScopes.add(scope) }
+	if (successful) { retainedScopes.set(scope.key, scope) }
 	if (scope.pending === 0 && !scope.successful) {
-		if (importScopes.get(key) === scope) { importScopes.delete(key) }
+		if (importScopes.get(scope.key) === scope) { importScopes.delete(scope.key) }
 		scope.handle.unregister();
 	}
 	if (importScopes.size <= scopeCacheLimit) { return }
@@ -55,7 +49,7 @@ export const tsImport: ModuleImport = <TModule extends object = ModuleNamespace>
 
 	const tsconfigOption = options.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH'];
 	const tsconfig = tsconfigOption === false ? false : resolve(tsconfigOption ?? 'tsconfig.json');
-	const key = JSON.stringify([tsconfig === false ? false : getTsconfigCacheKey(tsconfig), getOptionIdentity(options.onImport), getOptionIdentity(options.virtualSources)]);
+	const key = Json.serialize([tsconfig === false ? false : getTsconfigCacheKey(tsconfig), getOptionIdentity(options.onImport), getOptionIdentity(options.virtualSources)]);
 	let scope = findImportScope(key);
 	if (!scope) {
 		scope = { key, handle: registerScoped({ ...options, tsconfig, namespace: `tsImport-${nextImportNamespace += 1}` }), pending: 0, successful: false };
@@ -68,14 +62,14 @@ export const tsImport: ModuleImport = <TModule extends object = ModuleNamespace>
 	const currentScope = scope;
 	try {
 		return scope.handle.import<TModule>(specifier, options.parentURL).then(module => {
-			finishImport(key, currentScope, true);
+			finishImport(currentScope, true);
 			return module;
 		}, (error: unknown) => {
-			finishImport(key, currentScope, false);
+			finishImport(currentScope, false);
 			throw error;
 		});
 	} catch (error) {
-		finishImport(key, currentScope, false);
+		finishImport(currentScope, false);
 		throw error;
 	}
 };

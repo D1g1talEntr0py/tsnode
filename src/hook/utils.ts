@@ -1,7 +1,10 @@
 import { tsExtensions } from '../utils/path-utils';
 import type { ModuleRequest } from '../types';
+import { Json } from '../utils/json';
 
-const moduleExtensions = new Set(tsExtensions);
+type TsExtension = typeof tsExtensions[number];
+
+const moduleExtensions = new Set<TsExtension>(tsExtensions);
 
 export const canTryNativeTypeStripping = (url: string) => isNativeFileUrl(url);
 
@@ -34,7 +37,7 @@ export const getFormatFromFileUrl = (fileUrl: string) => {
 	if (end === -1) { end = fileUrl.length }
 
 	const dotIndex = fileUrl.lastIndexOf('.', end - 1);
-	if (dotIndex > fileUrl.lastIndexOf('/', end - 1) && moduleExtensions.has(fileUrl.slice(dotIndex, end))) {
+	if (dotIndex > fileUrl.lastIndexOf('/', end - 1) && moduleExtensions.has(fileUrl.slice(dotIndex, end) as TsExtension)) {
 		return 'module';
 	}
 
@@ -54,7 +57,7 @@ export const getNamespace = (url: string) => {
 export const getModuleRequest = (specifier: string): ModuleRequest | undefined => {
 	if (!specifier.startsWith('tsnode://')) { return }
 	try {
-		const request: unknown = JSON.parse(specifier.slice('tsnode://'.length));
+		const request: unknown = Json.parse(specifier.slice('tsnode://'.length));
 		if (request !== null && typeof request === 'object' && 'namespace' in request && typeof request.namespace === 'string' && 'specifier' in request && typeof request.specifier === 'string' && 'parentURL' in request && typeof request.parentURL === 'string') {
 			return request as ModuleRequest;
 		}

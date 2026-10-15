@@ -2,6 +2,7 @@ import { getPipePath } from './get-pipe-path';
 import { noop } from '../constants';
 import type { Parent, SendToParent } from '../../types';
 import type { Socket } from 'node:net';
+import { Json } from '../json';
 
 export type { Parent, SendToParent } from '../../types';
 
@@ -33,7 +34,9 @@ export const createIpcSender = (onDisconnect: () => void = noop) => {
 	let inFlight = 0;
 	let stallTimer: NodeJS.Timeout | undefined;
 	const frame = (data: Record<string, unknown>) => {
-		const message = Buffer.from(JSON.stringify(data));
+		const serialized = Json.serialize(data);
+		if (serialized === undefined) { throw new TypeError('IPC message must serialize to JSON') }
+		const message = Buffer.from(serialized);
 		const prefix = Buffer.allocUnsafe(4);
 		prefix.writeInt32BE(message.length);
 		return Buffer.concat([ prefix, message ]);

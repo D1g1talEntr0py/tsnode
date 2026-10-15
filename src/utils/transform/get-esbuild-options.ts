@@ -71,7 +71,11 @@ export const patchTransformResult = (result: TransformResult, sourcefile: string
 	let sourceMap: SourceMap | undefined;
 	if (result.map) {
 		if (sourcefile !== originalSourcefile) {
-			result.map = result.map.replace(Json.serialize(sourcefile), Json.serialize(originalSourcefile));
+			const serializedSourcefile = Json.serialize(sourcefile);
+			const serializedOriginalSourcefile = Json.serialize(originalSourcefile);
+			if (serializedSourcefile !== undefined && serializedOriginalSourcefile !== undefined) {
+				result.map = result.map.replace(serializedSourcefile, serializedOriginalSourcefile);
+			}
 		}
 
 		// esbuild owns this JSON string and guarantees the source-map schema in TransformResult.

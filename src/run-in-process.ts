@@ -1,9 +1,18 @@
 import { pathToFileURL } from 'node:url';
-import path from 'node:path';
+import { resolve } from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
+import { isFilePath, normalizeFileUrlPath } from './utils/path-utils';
 import worker_threads from 'node:worker_threads';
 import type { WorkerOptions } from 'node:worker_threads';
-import { isFilePath, normalizeFileUrlPath } from './utils/path-utils';
+
+/**
+ * Canonicalizes an import specifier to a file URL if it is a file path or already a file URL.
+ * @param specifier The import specifier to canonicalize.
+ * @returns The canonicalized import specifier.
+ */
+const canonicalizeImportSpecifier = (specifier: string) => {
+	return isFilePath(specifier) || specifier.startsWith('file://') ? pathToFileURL(resolve(normalizeFileUrlPath(specifier))).href : specifier;
+};
 
 /**
  * `child_process.fork()` defaults its `execArgv` option to a live read of
@@ -19,7 +28,6 @@ import { isFilePath, normalizeFileUrlPath } from './utils/path-utils';
  */
 export const ensureLoaderInheritedByChildren = () => {
 	const loaderImportUrl = new URL('./loader.js', import.meta.url).href;
-	const canonicalizeImportSpecifier = (specifier: string) => isFilePath(specifier) || specifier.startsWith('file://') ? pathToFileURL(path.resolve(normalizeFileUrlPath(specifier))).href : specifier;
 	const canonicalLoaderImportUrl = canonicalizeImportSpecifier(loaderImportUrl);
 	const alreadyPresent = process.execArgv.some((flag, index) => {
 		const importSpecifier = flag === '--import' ? process.execArgv[index + 1] : flag.startsWith('--import=') ? flag.slice('--import='.length) : undefined;
@@ -42,8 +50,7 @@ export const ensureLoaderInheritedByChildren = () => {
 			}
 		}
 
-		Object.defineProperty(TsnodeWorker, 'tsnodePatched', { value: true });
-		worker_threads.Worker = TsnodeWorker;
+		worker_threads.Worker = Object.defineProperty(TsnodeWorker, 'tsnodePatched', { value: true });
 		syncBuiltinESMExports();
 	}
 };
@@ -64,14 +71,15 @@ export const ensureLoaderInheritedByChildren = () => {
  */
 export const runInProcess = async (argv: string[], resolvedEntrypointPath?: string) => {
 	const [ entry, ...scriptArgv ] = argv;
+
 	if (entry === undefined) { throw new TypeError('Missing entry path') }
 
-	const argvEntryPath = path.resolve(normalizeFileUrlPath(entry));
+	const argvEntryPath = resolve(normalizeFileUrlPath(entry));
 	const executablePath = process.argv[0];
+
 	if (executablePath === undefined) { throw new TypeError('Missing executable path') }
 
-	// Present the argv shape the forked child would have had: the tsnode flags
-	// are already stripped, and argv[1] is the resolved entry.
+	// Present the argv shape the forked child would have had: the tsnode flags are already stripped, and argv[1] is the resolved entry.
 	process.argv = [ executablePath, argvEntryPath, ...scriptArgv ];
 
 	ensureLoaderInheritedByChildren();

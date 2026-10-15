@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import { childEnvironment, createProjectFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(import.meta.dirname, '..');
@@ -18,7 +19,7 @@ const runNode = async (script: string, cwd: string, env: Record<string, string> 
 		'--eval', script,
 	], { cwd, env: childEnvironment(env) });
 
-	return JSON.parse(result.stdout);
+	return Json.parse(result.stdout);
 };
 
 describe('load hook integration', () => {
@@ -29,9 +30,9 @@ describe('load hook integration', () => {
 		});
 		const urls = ['value.ts#fragment', 'view.tsx#fragment'].map(name => new URL(name, pathToFileURL(`${fixture.path}/`).href).href);
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register({ tsconfig: false });
-			try { console.log(JSON.stringify(await Promise.all(${JSON.stringify(urls)}.map(async url => (await import(url)).answer)))); }
+			try { console.log(JSON.stringify(await Promise.all(${Json.serialize(urls)}.map(async url => (await import(url)).answer)))); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 		expect(result).toEqual([42, 7]);
@@ -39,19 +40,19 @@ describe('load hook integration', () => {
 
 	test('applies inherited automatic JSX and legacy inline decorator options', async () => {
 		await using fixture = await createProjectFixture({
-			'config/base.json': JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'fixture-jsx', experimentalDecorators: true, useDefineForClassFields: false } }),
-			'tsconfig.json': JSON.stringify({ extends: './config/base.json' }),
-			'node_modules/fixture-jsx/package.json': JSON.stringify({ type: 'module', exports: { './jsx-runtime': './runtime.js' } }),
+			'config/base.json': Json.serialize({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'fixture-jsx', experimentalDecorators: true, useDefineForClassFields: false } })!,
+			'tsconfig.json': Json.serialize({ extends: './config/base.json' })!,
+			'node_modules/fixture-jsx/package.json': Json.serialize({ type: 'module', exports: { './jsx-runtime': './runtime.js' } })!,
 			'node_modules/fixture-jsx/runtime.js': 'export const jsx = (type, props) => ({ type, props });',
 			'view.tsx': 'export const view = <article title="automatic" />;',
 			'decorator.ts': 'function mark(target: object, key: string) { target.marked = key; } function make() { class C { @mark value = 7; } return C; } export const marked = new (make())().marked;',
 		});
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register();
 			try {
-				const view = await import(${JSON.stringify(pathToFileURL(`${fixture.path}/view.tsx`).href)});
-				const decorated = await import(${JSON.stringify(pathToFileURL(`${fixture.path}/decorator.ts`).href)});
+				const view = await import(${Json.serialize(pathToFileURL(`${fixture.path}/view.tsx`).href)});
+				const decorated = await import(${Json.serialize(pathToFileURL(`${fixture.path}/decorator.ts`).href)});
 				console.log(JSON.stringify({ view: view.view, marked: decorated.marked }));
 			} finally { handle.unregister(); }
 		`, fixture.path);
@@ -60,13 +61,13 @@ describe('load hook integration', () => {
 
 	test('honors assignment class fields on the native-strip candidate path', async () => {
 		await using fixture = await createProjectFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { useDefineForClassFields: false } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { useDefineForClassFields: false } })!,
 			'fields.ts': 'let calls = 0; class Base { set value(value: number) { calls += value; } } class Child extends Base { value = 7; } new Child(); export const result = calls;',
 		});
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register();
-			try { console.log(JSON.stringify((await import(${JSON.stringify(pathToFileURL(`${fixture.path}/fields.ts`).href)})).result)); }
+			try { console.log(JSON.stringify((await import(${Json.serialize(pathToFileURL(`${fixture.path}/fields.ts`).href)})).result)); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 		expect(result).toBe(7);
@@ -74,17 +75,17 @@ describe('load hook integration', () => {
 
 	test('new registrations invalidate transform results after config edits', async () => {
 		await using fixture = await createProjectFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { useDefineForClassFields: false } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { useDefineForClassFields: false } })!,
 			'fields.ts': 'enum Amount { Value = 7 } let calls = 0; class Base { set value(value: number) { calls += value; } } class Child extends Base { value = Amount.Value; } new Child(); export const result = calls;',
 		});
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			import { writeFileSync } from 'node:fs';
 			const results = [];
 			for (const [index, define] of [false, true, false].entries()) {
 				writeFileSync('tsconfig.json', JSON.stringify({ compilerOptions: { useDefineForClassFields: define } }));
 				const handle = register();
-				try { results.push((await import(${JSON.stringify(pathToFileURL(`${fixture.path}/fields.ts`).href)} + '?registration=' + index)).result); }
+				try { results.push((await import(${Json.serialize(pathToFileURL(`${fixture.path}/fields.ts`).href)} + '?registration=' + index)).result); }
 				finally { handle.unregister(); }
 			}
 			console.log(JSON.stringify(results));
@@ -99,9 +100,9 @@ describe('load hook integration', () => {
 			'entry.ts': 'import type { Shape } from "./types.ts"; import { unused } from "./effect.ts"; export const value: Shape = { value: 42 }; export const effects = globalThis.effects;',
 		});
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register({ tsconfig: false });
-			try { console.log(JSON.stringify(await import(${JSON.stringify(pathToFileURL(`${fixture.path}/entry.ts`).href)}))); }
+			try { console.log(JSON.stringify(await import(${Json.serialize(pathToFileURL(`${fixture.path}/entry.ts`).href)}))); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 		expect(result).toEqual({ value: { value: 42 }, effects: 1 });
@@ -110,13 +111,13 @@ describe('load hook integration', () => {
 	test('transforms JSON named imports with explicit import attributes', async () => {
 		await using fixture = await createProjectFixture({
 			'entry.ts': 'import { answer, label } from \'./data.json\' with { type: \'json\' };\nexport { answer, label };\n',
-			'data.json': JSON.stringify({ answer: 42, label: 'json' }),
+			'data.json': Json.serialize({ answer: 42, label: 'json' })!,
 		});
 		const entryUrl = pathToFileURL(`${fixture.path}/entry.ts`).href;
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register({ tsconfig: false });
-			try { console.log(JSON.stringify(await import(${JSON.stringify(entryUrl)}))); }
+			try { console.log(JSON.stringify(await import(${Json.serialize(entryUrl)}))); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 
@@ -127,9 +128,9 @@ describe('load hook integration', () => {
 		const virtualUrl = 'file:///virtual-load-test.ts';
 		await using fixture = await createProjectFixture({ 'entry.ts': '' });
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
-		const handle = register({ tsconfig: false, virtualSources: new Map([[${JSON.stringify(virtualUrl)}, 'export const value = 7;']]) });
-		try { console.log(JSON.stringify(await import(${JSON.stringify(virtualUrl)}))); }
+			import { register } from ${Json.serialize(apiPath('register'))};
+		const handle = register({ tsconfig: false, virtualSources: new Map([[${Json.serialize(virtualUrl)}, 'export const value = 7;']]) });
+		try { console.log(JSON.stringify(await import(${Json.serialize(virtualUrl)}))); }
 		finally { handle.unregister(); }
 		`, fixture.path);
 
@@ -145,12 +146,12 @@ describe('load hook integration', () => {
 		});
 		const urls = ['decorator.ts', 'enum.ts', 'namespace.ts'].map(name => pathToFileURL(`${fixture.path}/${name}`).href);
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register({ tsconfig: false });
 			try {
-				const decorator = await import(${JSON.stringify(urls[0])});
-				const enumeration = await import(${JSON.stringify(urls[1])});
-				const namespace = await import(${JSON.stringify(urls[2])});
+				const decorator = await import(${Json.serialize(urls[0])});
+				const enumeration = await import(${Json.serialize(urls[1])});
+				const namespace = await import(${Json.serialize(urls[2])});
 				console.log(JSON.stringify({ decorated: decorator.Decorated.name, color: enumeration.color, nested: namespace.Nested.value }));
 			} finally { handle.unregister(); }
 		`, fixture.path);
@@ -164,9 +165,9 @@ describe('load hook integration', () => {
 		});
 		const entryUrl = pathToFileURL(`${fixture.path}/entry.ts`).href;
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const handle = register({ tsconfig: false });
-			try { console.log(JSON.stringify(await import(${JSON.stringify(entryUrl)}))); }
+			try { console.log(JSON.stringify(await import(${Json.serialize(entryUrl)}))); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 
@@ -180,10 +181,10 @@ describe('load hook integration', () => {
 		});
 		const valueUrl = pathToFileURL(`${fixture.path}/value.ts`).href;
 		const result = await runNode(`
-			import { register } from ${JSON.stringify(apiPath('register'))};
+			import { register } from ${Json.serialize(apiPath('register'))};
 			const loadedUrls = [];
 			const handle = register({ namespace: 'load-callback', tsconfig: false, onImport: url => loadedUrls.push(url) });
-			try { await import(${JSON.stringify(`${valueUrl}?tsnode-namespace=load-callback`)}); console.log(JSON.stringify(loadedUrls)); }
+			try { await import(${Json.serialize(`${valueUrl}?tsnode-namespace=load-callback`)}); console.log(JSON.stringify(loadedUrls)); }
 			finally { handle.unregister(); }
 		`, fixture.path);
 

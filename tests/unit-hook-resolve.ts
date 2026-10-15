@@ -6,11 +6,12 @@ import { createData } from '../src/hook/initialize';
 import { createResolveSync } from '../src/hook/resolve';
 import { namespaceQuery, getNamespace } from '../src/hook/utils';
 import { childEnvironment, createProjectFixture } from './utils/fixture';
+import { Json } from '../src/utils/json';
 
 describe('hook resolve', () => {
 	test('does not parse tsconfig until an alias needs it', async () => {
 		await using fixture = await createProjectFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@app/*': ['./*'], 'ns:foo': ['./typed.ts'] } } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { paths: { '@app/*': ['./*'], 'ns:foo': ['./typed.ts'] } } })!,
 			'main.ts': '',
 			'child.js': 'export const value = 1;',
 			'typed.ts': 'export const value: number = 2;',
@@ -21,16 +22,16 @@ describe('hook resolve', () => {
 			'--import', new URL('./utils/source-resolve-hook.ts', import.meta.url).href,
 			'--input-type=module', '--eval', `
 				import { createRequire, registerHooks } from 'node:module';
-				import { createData } from ${JSON.stringify(new URL('../src/hook/initialize.ts', import.meta.url).href)};
-				import { createResolveSync } from ${JSON.stringify(new URL('../src/hook/resolve.ts', import.meta.url).href)};
+				import { createData } from ${Json.serialize(new URL('../src/hook/initialize.ts', import.meta.url).href)};
+				import { createResolveSync } from ${Json.serialize(new URL('../src/hook/resolve.ts', import.meta.url).href)};
 				const require = createRequire(import.meta.url);
 				const resolverLoaded = () => Object.keys(require.cache).some(entry => entry.includes('/src/utils/tsconfig-parser/'));
 				const before = resolverLoaded();
-				const data = createData({ tsconfig: ${JSON.stringify(path.join(fixture.path, 'tsconfig.json'))} });
+				const data = createData({ tsconfig: ${Json.serialize(path.join(fixture.path, 'tsconfig.json'))} });
 				const resolve = createResolveSync(data);
 				const hook = registerHooks({
 					resolve(specifier, context, nextResolve) {
-						return context.parentURL === import.meta.url ? resolve(specifier, { ...context, parentURL: ${JSON.stringify(parentURL)} }, nextResolve) : nextResolve(specifier, context);
+						return context.parentURL === import.meta.url ? resolve(specifier, { ...context, parentURL: ${Json.serialize(parentURL)} }, nextResolve) : nextResolve(specifier, context);
 					},
 				});
 				const resolveRequest = (specifier) => {
@@ -45,7 +46,7 @@ describe('hook resolve', () => {
 		], { cwd: fixture.path, env: childEnvironment(), encoding: 'utf-8' });
 		expect(result.status, result.stderr).toBe(0);
 		expect(result.stderr).toBe('');
-		expect(JSON.parse(result.stdout)).toEqual({
+		expect(Json.parse(result.stdout)).toEqual({
 			before: false,
 			files: ['child.js', 'child.js', 'typed.ts', 'typed.ts'].map(file => ({
 				url: pathToFileURL(path.join(fixture.path, file)).href,
@@ -64,7 +65,7 @@ describe('hook resolve', () => {
 
 	test.each([true, false])('demands config for JavaScript-parent fallback with allowJs=%s', async (allowJs) => {
 		await using fixture = await createProjectFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { allowJs } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { allowJs } })!,
 		});
 		const data = createData({ tsconfig: path.join(fixture.path, 'tsconfig.json') });
 		const resolve = createResolveSync(data);
@@ -92,7 +93,7 @@ describe('hook resolve', () => {
 
 	test('does not initialize aliases for dependency parents', async () => {
 		await using fixture = await createProjectFixture({
-			'tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@app/*': ['./src/*'] } } }),
+			'tsconfig.json': Json.serialize({ compilerOptions: { paths: { '@app/*': ['./src/*'] } } })!,
 		});
 		const data = createData({ tsconfig: path.join(fixture.path, 'tsconfig.json') });
 		const resolve = createResolveSync(data);
@@ -114,7 +115,7 @@ describe('hook resolve', () => {
 		const data = createData({ namespace, tsconfig: path.join(fixture.path, 'tsconfig.json') });
 		const resolve = createResolveSync(data);
 		const context = { conditions: ['node', 'import'], importAttributes: {}, parentURL: 'file:///project/main.ts' };
-		const url = resolve(`tsnode://${JSON.stringify({ namespace, specifier: './entry.ts?custom=a%26b#fragment', parentURL: context.parentURL })}`, context, (specifier) => ({ url: new URL(specifier, context.parentURL).href, format: 'module', shortCircuit: true })).url;
+		const url = resolve(`tsnode://${Json.serialize({ namespace, specifier: './entry.ts?custom=a%26b#fragment', parentURL: context.parentURL })!}`, context, (specifier) => ({ url: new URL(specifier, context.parentURL).href, format: 'module', shortCircuit: true })).url;
 		expect(getNamespace(url)).toBe(namespace);
 		expect(new URL(url).hash).toBe('#fragment');
 		expect(new URL(url).searchParams.get('custom')).toBe('a&b');
@@ -130,7 +131,7 @@ describe('hook resolve', () => {
 		const resolve = createResolveSync(createData({ namespace, tsconfig: false }));
 		const context = { conditions: ['node', 'import'], importAttributes: {}, parentURL: 'file:///outer.ts' };
 		let received = '';
-		const result = resolve(`tsnode://${JSON.stringify({ namespace, specifier, parentURL: 'file:///project/main.ts' })}`, context, (nextSpecifier, nextContext) => {
+		const result = resolve(`tsnode://${Json.serialize({ namespace, specifier, parentURL: 'file:///project/main.ts' })!}`, context, (nextSpecifier, nextContext) => {
 			received = nextSpecifier;
 			expect(nextContext?.conditions).toBe(context.conditions);
 			expect(nextContext?.importAttributes).toBe(context.importAttributes);

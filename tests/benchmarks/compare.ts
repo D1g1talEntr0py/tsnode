@@ -29,12 +29,11 @@
  * ─────────────────────────────
  * Mitata measures memory of the parent benchmark process, not the spawned
  * child processes that actually execute TypeScript. Since each child is spawned
- * independently, the parent barely allocates anything — which produced an
- * identical, meaningless reading for every runner. The counter is therefore
- * disabled here rather than printed and misread.
+ * independently, any allocation rows printed by mitata describe the parent's
+ * spawning and bookkeeping work, not the child runner's memory footprint.
  *
  * For accurate memory measurements:
- *   pnpm benchmark:memory  – Dedicated memory profiler (measures child process RSS)
+ *   pnpm benchmark:memory  – Profiling guide (does not collect measurements)
  *   /usr/bin/time -v node dist/cli.js fixture.ts  – Peak RSS for a single run
  *   node --prof dist/cli.js fixture.ts  – Generate .isolate for detailed profiling
  *
@@ -47,12 +46,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { spawn as spawnProcess } from 'node:child_process';
-import { createFixture } from 'fs-fixture';
+import { createFixture } from '../utils/fixture';
 import { bench, run, summary, group } from 'mitata';
 import { esmTree, tsconfigForTree } from './utils/generate-fixture';
 import { resolveComparison } from './utils/resolve-tsx';
 import { mean, median, percentile } from './utils/stats';
 import { gray, lightCyan } from '../../src/utils/ansi';
+import { Json } from '../../src/utils/json';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -77,7 +77,7 @@ const comparisonTargets = ['tsx', 'ts-node', 'jiti', 'esrun'] as const;
 let benchmarkTmpdir: string | undefined;
 
 /** Applied to every spawn so runners resolve their cache inside the sandbox. */
-const isolatedCacheEnv = () => benchmarkTmpdir ? { TMPDIR: benchmarkTmpdir } : {};
+const isolatedCacheEnv = () => benchmarkTmpdir ? { TEMP: benchmarkTmpdir, TMP: benchmarkTmpdir, TMPDIR: benchmarkTmpdir } : {};
 
 /**
  * Clears the sandboxed transform caches.
@@ -279,7 +279,7 @@ await using installRoot = await createFixture();
 
 const readVersion = async (packageJsonPath: string): Promise<string | undefined> => {
 	try {
-		const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as { version?: string };
+		const packageJson = Json.parse(await fs.readFile(packageJsonPath, 'utf-8')) as { version?: string };
 		return packageJson.version;
 	} catch {
 		return undefined;
@@ -319,43 +319,43 @@ const [
 ] = await Promise.all([
 	// simple: single .ts file
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		'main.ts': simpleTsContent,
 	}),
 	// small: 10-module ESM tree
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		...esmTree(10, 'ts'),
 	}),
 	// medium: 100-module ESM tree
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		...esmTree(100, 'ts'),
 	}),
 	// medium (cold-cache): baseline tsconfig
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		...esmTree(100, 'ts'),
 	}),
 	// large: 300-module ESM tree
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		...esmTree(300, 'ts'),
 	}),
 	// complex: single file with enums + namespaces
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		...tsconfigForTree,
 		'main.ts': complexTsContent,
 	}),
 	// baseline: plain .js, no TypeScript
 	createFixture({
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		'main.js': baselineMjsContent,
 	}),
 ]);
@@ -725,7 +725,7 @@ const runPairedReports = async () => {
 
 	await using testFixture = await createFixture({
 		...tsconfigForTree,
-		'package.json': JSON.stringify({ type: 'module' }),
+		'package.json': Json.serialize({ type: 'module' })!,
 		'main.test.ts': 'import assert from \'node:assert/strict\';\nimport test from \'node:test\';\n\ntest(\'startup\', () => {\n\tassert.equal(1, 1);\n});\n',
 	});
 
@@ -775,7 +775,7 @@ group('CLI signal relay overhead (single file, fork path)', () => {
 // Run
 // ---------------------------------------------------------------------------
 
-	// Parent-process measurement; meaningless for spawned children
+	// Allocation rows measure the parent, not spawned child RSS.
 	await run({ format: 'mitata', filter: /.*/, throw: false });
 
 	// Manual harnesses run after mitata so they don't contend with it for CPU.

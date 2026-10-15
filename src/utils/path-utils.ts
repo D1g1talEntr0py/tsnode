@@ -68,8 +68,8 @@ export const resolveEntrypointPath = (request: string) => {
 
 // Node only marks the actual process entry point module as import.meta.main; a dynamically `import()`-ed module
 // can never satisfy that, so entries relying on it must be forked instead of run through the in-process fast path.
-const tokenGap = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*`;
-const importMetaMainPattern = new RegExp(String.raw`^import${tokenGap}\.${tokenGap}meta\b${tokenGap}(?:\.${tokenGap}main\b|\[|(?=[;,)\s}]|$))`);
+const tokenGap = String.raw`(?:\s|/\*(?:[^*]|\*(?!/))*\*/|//[^\n]*(?:\n|$))*`;
+const importMetaMainPattern = new RegExp(String.raw`import${tokenGap}\.${tokenGap}meta\b${tokenGap}(?:\.${tokenGap}main\b|\[|(?=[;,)}\s]|$))`, 'y');
 
 /**
  * Checks if the given source code contains a usage of import.meta.main.
@@ -131,6 +131,7 @@ export const hasImportMetaMain = (source: string) => {
 						break;
 					}
 				}
+
 				continue;
 			}
 
@@ -148,7 +149,10 @@ export const hasImportMetaMain = (source: string) => {
 				continue;
 			}
 
-			if (source.slice(index).match(importMetaMainPattern)) { return true }
+			if (source.startsWith('import', index)) {
+				importMetaMainPattern.lastIndex = index;
+				if (importMetaMainPattern.test(source)) { return true }
+			}
 
 			index += 1;
 		}
@@ -163,11 +167,11 @@ export const entryUsesImportMetaMain = (entryPath: string) => {
 	try { return hasImportMetaMain(readFileSync(entryPath, encoding)) } catch { return false }
 };
 
-export const tsExtensions = ['.ts', '.tsx', '.jsx'];
+export const tsExtensions = [ '.ts', '.tsx', '.jsx' ] as const;
 export const tsExtensionsPattern = /\.(?:ts|[tj]sx)($|\?)/;
 export const implicitTsExtensionsPattern = /\.(?:ts|tsx|jsx)($|\?)/;
 export const isJsonPattern = /\.json($|\?)/;
 export const isDirectoryPattern = /\/(?:$|\?)/;
 // Only matches packages names without subpaths (e.g. `foo` but not `foo/bar`). Back slash included to exclude Windows paths
 export const isBarePackageNamePattern = /^(?:@[^/]+\/)?[^/\\]+$/;
-export const nodeModulesPath = `${sep}node_modules${sep}`;
+export const nodeModulesPath = `${sep}node_modules${sep}` as const;

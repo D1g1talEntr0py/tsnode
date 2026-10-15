@@ -1,11 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { describe, expect, expectTypeOf, test } from 'vitest';
-import { outdent } from './utils/outdent';
-import { readJsonFile, readJsonFileSync } from '../src/utils/read-json-file';
-import type { JsonValue } from '../src/utils/json';
 import { tmpdir, legacyTempDirs, cacheSchemaVersion } from '../src/utils/temporary-directory';
 import {
 	bgBlue,
@@ -36,6 +32,7 @@ import {
 import { getPipePath, isWindows } from '../src/utils/ipc/get-pipe-path';
 import { findFirstPositionalIndex, removeArgvFlags, inheritedExecArgv } from '../src/remove-argv-flags';
 import { getFormatFromFileUrl, getNamespace, namespaceQuery, canTryNativeTypeStripping, isNativeFileUrl } from '../src/hook/utils';
+import { Json, type JsonString } from '../src/utils/json';
 
 const flagDefinitions = {
 	color: { type: Boolean },
@@ -45,6 +42,35 @@ const flagDefinitions = {
 } as const;
 
 describe('unit utilities', () => {
+	describe('JSON serialization', () => {
+		test('references the native serializer and preserves the branded return type', () => {
+			const data = { count: 2 };
+			const serialized = Json.serialize(data);
+
+			expectTypeOf(serialized).toEqualTypeOf<JsonString<typeof data>>();
+			expectTypeOf(Json.serialize(data, ['count'])).toEqualTypeOf<JsonString<typeof data>>();
+			expectTypeOf(Json.serialize(data, () => undefined)).toEqualTypeOf<JsonString<typeof data>>();
+			expect(Json.serialize).toBe(JSON.stringify);
+			expect(serialized).toBe('{"count":2}');
+		});
+
+		test('preserves native undefined results', () => {
+			expect(Json.serialize(undefined)).toBeUndefined();
+			expect(Json.serialize(() => true)).toBeUndefined();
+			expect(Json.serialize(Symbol('value'))).toBeUndefined();
+			expect(Json.serialize({ toJSON: () => undefined })).toBeUndefined();
+			expect(Json.serialize({ count: 2 }, () => undefined)).toBeUndefined();
+		});
+
+		test('supports array and function replacers with indentation', () => {
+			const data = { count: 2, hidden: true };
+
+			expect(Json.serialize(data, ['count'], 2)).toBe('{\n  "count": 2\n}');
+			expect(Json.serialize(data, (key, value) => key === 'hidden' ? undefined : value, '\t')).toBe('{\n\t"count": 2\n}');
+			expect(Json.serialize(data, null)).toBe(Json.serialize(data));
+		});
+	});
+
 	test('filters attached parent eval payloads and duplicate aliases without losing startup options', () => {
 		expect(inheritedExecArgv(['-econsole.log(1)', '-p42', '--input-type=module', '-C', 'development', '--max_old_space_size', '128'], ['--conditions=development', 'entry.ts']))
 			.toEqual(['--max_old_space_size', '128']);
@@ -155,6 +181,20 @@ describe('unit utilities', () => {
 	});
 
 	describe('path utilities', () => {
+		test('handles long comment gaps without reinterpreting closing delimiters', () => {
+			const gap = '/* gap **/ '.repeat(1_000);
+			expect(hasImportMetaMain(`import ${gap}.meta.url`)).toBe(false);
+			expect(hasImportMetaMain(`import ${gap}.meta.main`)).toBe(true);
+			expect(hasImportMetaMain('import /* first */ invalid /* second */ .meta.main')).toBe(false);
+		});
+
+		test('scans large entries and still detects a trailing main reference', () => {
+			const source = 'import.meta.url;\n'.repeat(5_000);
+			expect(hasImportMetaMain(source)).toBe(false);
+			expect(hasImportMetaMain(`${source}console.log(import /* gap */ .meta.main)`)).toBe(true);
+			expect(hasImportMetaMain(`${source}console.log(\`value: \${import.meta.main}\`)`)).toBe(true);
+		});
+
 		test.each([
 			'console.log(`${import.meta.main}`)',
 			'console.log(`${`${import.meta.main}`}`)',
@@ -315,89 +355,6 @@ describe('unit utilities', () => {
 				expect(pipePath).toContain('1234.pipe');
 			} else {
 				expect(pipePath).toBe(path.join(tmpdir, '1234.pipe'));
-			}
-		});
-	});
-
-	describe('json reading', () => {
-		test('includes undefined in undecoded reader return types', () => {
-			expectTypeOf(readJsonFileSync('config.json')).toEqualTypeOf<JsonValue | undefined>();
-			expectTypeOf(readJsonFile('config.json')).toEqualTypeOf<Promise<JsonValue | undefined>>();
-		});
-
-		test('reads and parses valid JSON', () => {
-			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
-			const filePath = path.join(directory, 'config.json');
-			fs.writeFileSync(filePath, outdent`
-				{
-					"name": "tsnode",
-					"enabled": true,
-					"count": 2
-				}
-			`);
-
-			try {
-				expect(readJsonFileSync(filePath)).toEqual({
-					name: 'tsnode',
-					enabled: true,
-					count: 2,
-				});
-			} finally {
-				fs.rmSync(directory, { recursive: true, force: true });
-			}
-		});
-
-		test('returns decoder-derived values', async () => {
-			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
-			const filePath = path.join(directory, 'decoded.json');
-			const decodeName = (value: unknown) => value && typeof value === 'object' && 'name' in value && typeof value.name === 'string' ? value.name : undefined;
-			fs.writeFileSync(filePath, JSON.stringify({ name: 'tsnode' }));
-
-			try {
-				expect(readJsonFileSync(filePath, decodeName)).toBe('tsnode');
-				expect(await readJsonFile(filePath, decodeName)).toBe('tsnode');
-			} finally {
-				fs.rmSync(directory, { recursive: true, force: true });
-			}
-		});
-
-		test('returns undefined for missing files', () => {
-			const filePath = path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`);
-			expect(readJsonFileSync(filePath)).toBeUndefined();
-		});
-
-		test('returns undefined for missing files asynchronously', async () => {
-			const filePath = path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`);
-			expect(await readJsonFile(filePath)).toBeUndefined();
-		});
-
-		test('returns undefined for missing file URLs', async () => {
-			const fileUrl = pathToFileURL(path.join(os.tmpdir(), `missing-tsnode-file-${Date.now()}-${Math.random()}.json`));
-			expect(readJsonFileSync(fileUrl)).toBeUndefined();
-			expect(await readJsonFile(fileUrl)).toBeUndefined();
-		});
-
-		test('returns undefined for invalid JSON', () => {
-			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
-			const filePath = path.join(directory, 'broken.json');
-			fs.writeFileSync(filePath, '{"name": "tsnode", }');
-
-			try {
-				expect(readJsonFileSync(filePath)).toBeUndefined();
-			} finally {
-				fs.rmSync(directory, { recursive: true, force: true });
-			}
-		});
-
-		test('returns undefined for invalid JSON asynchronously', async () => {
-			const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tsnode-json-'));
-			const filePath = path.join(directory, 'broken.json');
-			fs.writeFileSync(filePath, '{"name": "tsnode", }');
-
-			try {
-				expect(await readJsonFile(filePath)).toBeUndefined();
-			} finally {
-				fs.rmSync(directory, { recursive: true, force: true });
 			}
 		});
 	});

@@ -9,18 +9,21 @@ import { isJsonPattern, tsExtensionsPattern, fileUrlPrefix } from '../utils/path
 import { getNamespace, namespaceQuery, canTryNativeTypeStripping } from './utils';
 import type { CachedTransformOptions, HookData, Transformed } from '../types';
 import type { LoadHookContext, LoadHookSync } from 'node:module';
+import { Json } from '../utils/json';
 
 type LoadResult = ReturnType<LoadHookSync> & { responseURL?: string };
 
 const inlineSourceMapPrefix = '\n//# sourceMappingURL=data:application/json;base64,';
 
 // Type-stripped results have no map: positions are preserved by whitespace
-const toModuleSource = ({ code, map }: Transformed) => map ? code + inlineSourceMapPrefix + Buffer.from(JSON.stringify(map), encoding).toString('base64') : code;
+const toModuleSource = ({ code, map }: Transformed) => map ? code + inlineSourceMapPrefix + Buffer.from(Json.serialize(map), encoding).toString('base64') : code;
 const isModuleTypeScriptFormat = (format: string | null | undefined) => format === 'module-typescript' || format === 'typescript';
 const getTsconfigRaw = (hookData: HookData) => ensureParsedTsconfig(hookData);
 const getTsconfigHash = (hookData: HookData) => {
 	if (hookData.tsconfig === false) { return undefined }
+
 	const parsed = getTsconfigRaw(hookData);
+
 	return parsed ? getTsconfigCacheKey(hookData.tsconfig ?? process.env['TSNODE_TSCONFIG_PATH'], parsed) : 'missing-tsconfig';
 };
 const getFilePath = (url: string) => url.startsWith(fileUrlPrefix) ? fileURLToPath(url) : url;
@@ -40,9 +43,7 @@ const tryStripTypes = (code: string) => {
 	try {
 		return stripTypes(code);
 	} catch (error) {
-		if (getErrorCode(error) === 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX') {
-			return;
-		}
+		if (getErrorCode(error) === 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX') { return }
 
 		throw error;
 	}
@@ -88,7 +89,7 @@ export const createLoadSync = (hookData: HookData): LoadHookSync => {
 	const getTransformOptions = () => {
 		if (!transformOptions) {
 			const configuration = getTsconfigRaw(hookData);
-			const serialized = JSON.stringify(configuration);
+			const serialized = Json.serialize(configuration) ?? '';
 			transformOptions = { tsconfigHash: getTsconfigHash(hookData), tsconfigSnapshot: { raw: configuration ? serialized : undefined, serialized } };
 		}
 

@@ -158,7 +158,8 @@ class FileCache<T extends CachedTransform> implements Cache<T> {
 	 */
 	set(key: string, value: T) {
 		const { identity, ...result } = value;
-		const serialized = identity ? `{"identity":${typeof identity === 'string' ? identity : JSON.stringify(identity)},"value":${JSON.stringify(result)}}` : JSON.stringify(value);
+		const serialized = identity ? `{"identity":${typeof identity === 'string' ? identity : Json.serialize(identity)},"value":${Json.serialize(result)}}` : Json.serialize(value);
+		if (serialized === undefined) { throw new TypeError('Cache value must serialize to JSON') }
 		const bytes = Buffer.byteLength(serialized, encoding);
 
 		this.#setMemory(key, value, bytes);
@@ -377,7 +378,7 @@ class FileCache<T extends CachedTransform> implements Cache<T> {
 	#decodeEntry(serialized: string, identity?: RequestIdentity) {
 		if (!identity) { return Json.decode(serialized, this.#decode) }
 
-		const prefix = `{"identity":${typeof identity === 'string' ? identity : JSON.stringify(identity)},"value":`;
+		const prefix = `{"identity":${typeof identity === 'string' ? identity : Json.serialize(identity)},"value":`;
 
 		if (!serialized.startsWith(prefix) || !serialized.endsWith('}')) { return undefined }
 

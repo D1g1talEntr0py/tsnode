@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureLoaderInheritedByChildren } from './run-in-process';
 
@@ -13,12 +13,13 @@ import { ensureLoaderInheritedByChildren } from './run-in-process';
  */
 export const runEvalInProcess = async (code: string, scriptArgv: string[]) => {
 	const executablePath = process.argv[0];
+
 	if (executablePath === undefined) { throw new TypeError('Missing executable path') }
 
 	process.argv = [ executablePath, ...scriptArgv ];
 	ensureLoaderInheritedByChildren();
 
-	const evalUrl = pathToFileURL(path.join(process.cwd(), '[eval1]')).href;
+	const evalUrl = pathToFileURL(join(process.cwd(), '[eval1]')).href;
 
 	(await import('./api/index')).register({ virtualSources: new Map([ [ evalUrl, code ] ]) });
 
